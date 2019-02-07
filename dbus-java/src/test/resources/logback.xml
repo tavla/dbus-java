@@ -13,7 +13,7 @@
     <logger name="cx.ath.matthew" level="INFO" />
     <logger name="org.freedesktop.dbus.connections" level="TRACE" />
     <logger name="org.freedesktop.dbus.errors" level="INFO" />
-    <logger name="org.freedesktop.dbus.messages" level="INFO" />
+    <logger name="org.freedesktop.dbus.messages" level="TRACE" />
     <logger name="org.freedesktop.dbus.bin" level="INFO" />
 
     <root level="TRACE">
