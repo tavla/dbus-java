@@ -20,6 +20,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.channels.Channels;
 import java.util.Random;
 
 import org.freedesktop.Hexdump;
@@ -31,9 +32,10 @@ import org.freedesktop.dbus.messages.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import cx.ath.matthew.unix.UnixServerSocket;
-import cx.ath.matthew.unix.UnixSocket;
-import cx.ath.matthew.unix.UnixSocketAddress;
+import jnr.unixsocket.UnixServerSocketChannel;
+import jnr.unixsocket.UnixSocketAddress;
+import jnr.unixsocket.UnixSocketChannel;
+import jnr.unixsocket.UnixSocketOptions;
 
 public class Transport implements Closeable {
     private final Logger logger = LoggerFactory.getLogger(getClass());
@@ -41,7 +43,7 @@ public class Transport implements Closeable {
     private MessageReader min;
     private MessageWriter mout;
 
-    private UnixServerSocket unixServerSocket;
+    private UnixServerSocketChannel unixServerSocket;
 
     public Transport() {
     }
@@ -96,72 +98,75 @@ public class Transport implements Closeable {
         logger.debug("Connecting to {}", address);
         OutputStream out = null;
         InputStream in = null;
-        UnixSocket us = null;
-        Socket s = null;
-        int mode = 0;
+        UnixSocketChannel us = null;
+        SASL.SaslMode mode = SASL.SaslMode.CLIENT;
         int types = 0;
 
         if (address.getBusType() == AddressBusTypes.UNIX) {
             types = SASL.AUTH_EXTERNAL;
+            
+            UnixSocketAddress unixSocketAddress;
+            
+            if (null != address.getParameter("abstract")) {
+                unixSocketAddress = new UnixSocketAddress("\0" + address.getParameter("abstract"));
+            } else if (null != address.getParameter("path")) {
+                unixSocketAddress = new UnixSocketAddress(address.getParameter("path"));
+            } else {
+                throw new IOException("Unix socket url has to specify 'path' or 'abstract'");
+            }
+            
             if (null != address.getParameter("listen")) {
-                mode = SASL.MODE_SERVER;
-                unixServerSocket = new UnixServerSocket();
-                if (null != address.getParameter("abstract")) {
-                    unixServerSocket.bind(new UnixSocketAddress(address.getParameter("abstract"), true));
-                } else if (null != address.getParameter("path")) {
-                    unixServerSocket.bind(new UnixSocketAddress(address.getParameter("path"), false));
-                }
+                mode = SASL.SaslMode.SERVER;
+                unixServerSocket = UnixServerSocketChannel.open();
+
+                unixServerSocket.socket().bind(unixSocketAddress);
                 us = unixServerSocket.accept();
             } else {
-                mode = SASL.MODE_CLIENT;
-
-
-                us = new UnixSocket();
-                if (null != address.getParameter("abstract")) {
-                    us.connect(new UnixSocketAddress(address.getParameter("abstract"), true));
-                } else if (null != address.getParameter("path")) {
-                    us.connect(new UnixSocketAddress(address.getParameter("path"), false));
-                }
+                mode = SASL.SaslMode.CLIENT;
+                us = UnixSocketChannel.open(unixSocketAddress);
             }
-            us.setPassCred(true);
-            in = us.getInputStream();
-            out = us.getOutputStream();
+            
+            us.setOption(UnixSocketOptions.SO_PASSCRED, true);
+
+            in = Channels.newInputStream(us);
+            out = Channels.newOutputStream(us);
         } else if (address.getBusType() == AddressBusTypes.TCP) {
             types = SASL.AUTH_SHA;
+            Socket s;
             if (null != address.getParameter("listen")) {
-                mode = SASL.MODE_SERVER;
+                mode = SASL.SaslMode.SERVER;
                 try (ServerSocket ss = new ServerSocket()) {
                     ss.bind(new InetSocketAddress(address.getParameter("host"), Integer.parseInt(address.getParameter("port"))));
                     s = ss.accept();
                 }
             } else {
-                mode = SASL.MODE_CLIENT;
+                mode = SASL.SaslMode.CLIENT;
                 s = new Socket();
                 s.connect(new InetSocketAddress(address.getParameter("host"), Integer.parseInt(address.getParameter("port"))));
             }
             in = s.getInputStream();
             out = s.getOutputStream();
+            
+            logger.trace("Setting timeout to {} on Socket", timeout);
+            s.setSoTimeout(timeout);
+
         } else {
             throw new IOException("unknown address type " + address.getType());
         }
 
-        if (!(new SASL()).auth(mode, types, address.getParameter("guid"), out, in, us)) {
+        if (!(new SASL()).auth(mode, types, address.getParameter("guid"), out, in, us.socket())) {
             out.close();
             throw new IOException("Failed to auth");
         }
         if (null != us) {
             logger.trace("Setting timeout to {} on Socket", timeout);
             if (timeout == 1) {
-                us.setBlocking(false);
+                us.configureBlocking(false);
             } else {
-                us.setSoTimeout(timeout);
+                us.socket().setSoTimeout(timeout);
             }
         }
-        if (null != s) {
-            logger.trace("Setting timeout to {} on Socket", timeout);
-            s.setSoTimeout(timeout);
-        }
-        mout = new MessageWriter(out);
+        mout = new MessageWriter(out, address.getBusType() == AddressBusTypes.UNIX);
         min = new MessageReader(in);
     }
 
@@ -169,7 +174,7 @@ public class Transport implements Closeable {
         logger.debug("Disconnecting Transport");
         min.close();
         mout.close();
-        if (unixServerSocket != null && !unixServerSocket.isClosed()) {
+        if (unixServerSocket != null && unixServerSocket.isOpen()) {
             unixServerSocket.close();
         }
     }

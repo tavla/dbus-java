@@ -14,9 +14,9 @@ import org.freedesktop.dbus.exceptions.DBusException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import cx.ath.matthew.unix.UnixServerSocket;
-import cx.ath.matthew.unix.UnixSocket;
-import cx.ath.matthew.unix.UnixSocketAddress;
+import jnr.unixsocket.UnixServerSocketChannel;
+import jnr.unixsocket.UnixSocket;
+import jnr.unixsocket.UnixSocketAddress;
 
 /**
  *
@@ -93,18 +93,18 @@ public class EmbeddedDBusDaemon implements Closeable {
 
     private void startUnixSocket(BusAddress address) throws IOException {
         LOGGER.debug("enter");
-        UnixServerSocket uss;
+        UnixServerSocketChannel uss = UnixServerSocketChannel.open();
         if (null != address.getParameter("abstract")) {
-            uss = new UnixServerSocket(new UnixSocketAddress(address.getParameter("abstract"), true));
+            uss.socket().bind(new UnixSocketAddress("\0" + address.getParameter("abstract")));
         } else {
-            uss = new UnixServerSocket(new UnixSocketAddress(address.getParameter("path"), false));
+            uss.socket().bind(new UnixSocketAddress(address.getParameter("path")));
         }
         listenSocket = uss;
 
         // accept new connections
         while (daemonThread.isRunning()) {
-            UnixSocket s = uss.accept();
-            if ((new SASL()).auth(SASL.MODE_SERVER, authTypes, address.getParameter("guid"), s.getOutputStream(), s.getInputStream(), s)) {
+            UnixSocket s = uss.socket().accept();
+            if ((new SASL()).auth(SASL.SaslMode.SERVER, authTypes, address.getParameter("guid"), s.getOutputStream(), s.getInputStream(), s)) {
                 // s.setBlocking(false);
                 daemonThread.addSock(s);
             } else {
@@ -128,7 +128,7 @@ public class EmbeddedDBusDaemon implements Closeable {
                 Socket s = ss.accept();
                 boolean authOK = false;
                 try {
-                    authOK = (new SASL()).auth(SASL.MODE_SERVER, authTypes, address.getParameter("guid"), s.getOutputStream(), s.getInputStream(), null);
+                    authOK = (new SASL()).auth(SASL.SaslMode.SERVER, authTypes, address.getParameter("guid"), s.getOutputStream(), s.getInputStream(), null);
                 } catch (Exception e) {
                     LOGGER.debug("", e);
                 }

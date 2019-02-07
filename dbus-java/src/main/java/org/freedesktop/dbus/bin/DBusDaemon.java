@@ -21,6 +21,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.nio.channels.Channels;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -55,7 +56,7 @@ import org.freedesktop.dbus.types.Variant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import cx.ath.matthew.unix.UnixSocket;
+import jnr.unixsocket.UnixSocketChannel;
 
 /**
  * A replacement DBusDaemon
@@ -67,23 +68,23 @@ public class DBusDaemon extends Thread implements Closeable {
 
     static class Connstruct {
         // CHECKSTYLE:OFF
-        public UnixSocket    usock;
+        public UnixSocketChannel    usock;
         public Socket        tsock;
         public MessageReader min;
         public MessageWriter mout;
         public String        unique;
         // CHECKSTYLE:ON
 
-        Connstruct(UnixSocket sock) {
+        Connstruct(UnixSocketChannel sock) {
             this.usock = sock;
-            min = new MessageReader(sock.getInputStream());
-            mout = new MessageWriter(sock.getOutputStream());
+            min = new MessageReader(Channels.newInputStream(sock));
+            mout = new MessageWriter(Channels.newOutputStream(sock), true);
         }
 
         Connstruct(Socket sock) throws IOException {
             this.tsock = sock;
             min = new MessageReader(sock.getInputStream());
-            mout = new MessageWriter(sock.getOutputStream());
+            mout = new MessageWriter(sock.getOutputStream(), false);
         }
 
         @Override
@@ -844,7 +845,7 @@ public class DBusDaemon extends Thread implements Closeable {
 
     }
 
-    public void addSock(UnixSocket us) {
+    public void addSock(UnixSocketChannel us) {
 
         LOGGER.debug("enter");
         LOGGER.warn("New Client");
