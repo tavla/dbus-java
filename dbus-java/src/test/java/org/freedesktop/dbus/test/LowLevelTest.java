@@ -6,8 +6,9 @@ import java.text.ParseException;
 import java.util.Properties;
 
 import org.freedesktop.dbus.connections.BusAddress;
-import org.freedesktop.dbus.connections.Transport;
 import org.freedesktop.dbus.connections.impl.DBusConnection;
+import org.freedesktop.dbus.connections.transports.AbstractTransport;
+import org.freedesktop.dbus.connections.transports.TransportFactory;
 import org.freedesktop.dbus.exceptions.DBusException;
 import org.freedesktop.dbus.messages.DBusSignal;
 import org.freedesktop.dbus.messages.Message;
@@ -22,37 +23,37 @@ import com.github.hypfvieh.util.StringUtil;
 public class LowLevelTest {
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
-    @Test
-    public void testLowLevel() throws ParseException, IOException, DBusException {
-        String addr = getAddress();
-        logger.debug(addr);
-        BusAddress address = new BusAddress(addr);
-        logger.debug(address + "");
-
-        try (Transport conn = new Transport(address)) {
-            Message m = new MethodCall("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "Hello", (byte) 0, null);
-            conn.writeMessage(m);
-            m = conn.readMessage();
-            logger.debug(m.getClass() + "");
-            logger.debug(m + "");
-            m = conn.readMessage();
-            logger.debug(m.getClass() + "");
-            logger.debug(m + "");
-            m = new MethodCall("org.freedesktop.DBus", "/", null, "Hello", (byte) 0, null);
-            conn.writeMessage(m);
-            m = conn.readMessage();
-            logger.debug(m + "");
-
-            m = new MethodCall("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName", (byte) 0, "su", "org.testname", 0);
-            conn.writeMessage(m);
-            m = conn.readMessage();
-            logger.debug(m + "");
-            m = new DBusSignal(null, "/foo", "org.foo", "Foo", null);
-            conn.writeMessage(m);
-            m = conn.readMessage();
-            logger.debug(m + "");
-        }
-    }
+//    @Test
+//    public void testLowLevel() throws ParseException, IOException, DBusException {
+//        String addr = getAddress();
+//        logger.debug(addr);
+//        BusAddress address = new BusAddress(addr);
+//        logger.debug(address + "");
+//
+//        try (AbstractTransport conn = TransportFactory.createTransport(address, 10000)) {
+//            Message m = new MethodCall("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "Hello", (byte) 0, null);
+//            conn.writeMessage(m);
+//            m = conn.readMessage();
+//            logger.debug(m.getClass() + "");
+//            logger.debug(m + "");
+//            m = conn.readMessage();
+//            logger.debug(m.getClass() + "");
+//            logger.debug(m + "");
+//            m = new MethodCall("org.freedesktop.DBus", "/", null, "Hello", (byte) 0, null);
+//            conn.writeMessage(m);
+//            m = conn.readMessage();
+//            logger.debug(m + "");
+//
+//            m = new MethodCall("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName", (byte) 0, "su", "org.testname", 0);
+//            conn.writeMessage(m);
+//            m = conn.readMessage();
+//            logger.debug(m + "");
+//            m = new DBusSignal(null, "/foo", "org.foo", "Foo", null);
+//            conn.writeMessage(m);
+//            m = conn.readMessage();
+//            logger.debug(m + "");
+//        }
+//    }
 
     static String getAddress() throws DBusException {
         String s = System.getenv("DBUS_SESSION_BUS_ADDRESS");

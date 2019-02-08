@@ -36,7 +36,7 @@ public class IncomingMessageThread extends Thread {
             // read from the wire
             try {
                 // this blocks on outgoing being non-empty or a message being available.
-                msg = connection.readIncoming();
+      //          msg = connection.readIncoming();
                 if (msg != null) {
                     logger.trace("Got Incoming Message: {}", msg);
 

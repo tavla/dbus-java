@@ -25,7 +25,7 @@ public class TestCross {
 
     private ServerThread serverThread;
 
-    private volatile boolean serverReady = false;
+    private volatile int serverReady = 0;
 
     @BeforeEach
     public void before() {
@@ -40,12 +40,13 @@ public class TestCross {
         }
     }
 
-
-
     @Test
     public void testCross() throws InterruptedException {
-        while (!serverReady) {
+        while (serverReady == 0) {
             Thread.sleep(500L);
+        }
+        if (serverReady < 0) {
+            fail("Test failure, server did not start");
         }
 
         try {
@@ -93,7 +94,7 @@ public class TestCross {
                 cts = new CrossTestServer(conn);
                 conn.addSigHandler(Binding.SampleClient.Trigger.class, cts);
                 conn.exportObject("/Test", cts);
-                serverReady = true;
+                serverReady = 1;
                 while (cts.isRun()) {
                     try {
                         //cts.wait();
@@ -111,7 +112,7 @@ public class TestCross {
                 assertFalse(cts.getNotdone().isEmpty(), "All tests should have been run");
             } catch (DBusException | IOException exDe) {
                 exDe.printStackTrace();
-                fail("Exception while server running");
+                serverReady = -1;
             }
         }
 

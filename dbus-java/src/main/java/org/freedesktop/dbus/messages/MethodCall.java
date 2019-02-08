@@ -25,6 +25,8 @@ public class MethodCall extends Message {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
+    private Message reply = null;
+    
     MethodCall() {
     }
 
@@ -107,7 +109,8 @@ public class MethodCall extends Message {
         logger.debug("marshalled size ({}): {}",blen, Hexdump.format(blen));
     }
 
-    private static long REPLY_WAIT_TIMEOUT = 20000;
+    // TODO: 20000
+    private static long REPLY_WAIT_TIMEOUT = 2000000;
 
     /**
     * Set the default timeout for method calls.
@@ -118,9 +121,6 @@ public class MethodCall extends Message {
         REPLY_WAIT_TIMEOUT = timeout;
     }
 
-    // CHECKSTYLE:OFF
-    Message reply = null;
-    // CHECKSTYLE:ON
 
     public synchronized boolean hasReply() {
         return null != reply;

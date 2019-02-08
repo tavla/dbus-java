@@ -16,6 +16,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintWriter;
+import java.net.Socket;
 import java.net.SocketException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -387,7 +388,7 @@ public class SASL {
      * @return true if the auth was successful and false if it failed.
      * @throws IOException on failure
      */
-    public boolean auth(SaslMode mode, int types, String guid, OutputStream out, InputStream in, UnixSocket us) throws IOException {
+    public boolean auth(SaslMode mode, int types, String guid, OutputStream out, InputStream in, Socket us) throws IOException {
         String luid = null;
         String kernelUid = null;
 
@@ -410,72 +411,56 @@ public class SASL {
                     out.write(new byte[] {
                             0
                     });                    
-//                    if (null == us) {
-//                        out.write(new byte[] {
-//                                0
-//                        });
-//                    } else {
-////                        Ucred ucred = new Ucred();
-////                        ucred.gid.set(POSIXFactory.getJavaPOSIX().getgid());
-////                        ucred.uid.set(POSIXFactory.getJavaPOSIX().getuid());
-////                        ucred.pid.set(POSIXFactory.getJavaPOSIX().getpid());
-//
-//                        OutputStreamWriter osw = new OutputStreamWriter(out);
-//                        osw.write((byte) 0);
-//                        osw.flush();
-////                        us.sendUrgentData((byte) 0);
-//
-//                        //us.sendCredentialByte((byte) 0);
-//                    }
                     send(out, AUTH);
                     state = SaslAuthState.WAIT_DATA;
                     break;
                 case WAIT_DATA:
                     c = receive(in);
                     switch (c.getCommand()) {
-                    case DATA:
-                        switch (doChallenge(current, c)) {
-                        case CONTINUE:
-                            send(out, DATA, c.getResponse());
+                        case DATA:
+                            switch (doChallenge(current, c)) {
+                                case CONTINUE:
+                                    send(out, DATA, c.getResponse());
+                                    break;
+                                case OK:
+                                    send(out, DATA, c.getResponse());
+                                    state = SaslAuthState.WAIT_OK;
+                                    break;
+                                case ERROR:
+                                default:
+                                    send(out, ERROR, c.getResponse());
+                                    break;
+                            }
+                        break;
+                        case REJECTED:
+                            failed |= current;
+                            int available = c.getMechs() & (~failed);
+                            if (0 != (available & AUTH_EXTERNAL)) {
+                                send(out, AUTH, "EXTERNAL", luid);
+                                current = AUTH_EXTERNAL;
+                            } else if (0 != (available & AUTH_SHA)) {
+                                send(out, AUTH, "DBUS_COOKIE_SHA1", luid);
+                                current = AUTH_SHA;
+                            } else if (0 != (available & AUTH_ANON)) {
+                                send(out, AUTH, "ANONYMOUS");
+                                current = AUTH_ANON;
+                            } else {
+                                state = SaslAuthState.FAILED;
+                            }
+                            break;
+                        case ERROR:
+                            send(out, CANCEL);
+                            state = SaslAuthState.WAIT_REJECT;
                             break;
                         case OK:
-                            send(out, DATA, c.getResponse());
-                            state = SaslAuthState.WAIT_OK;
-                            break;                            
-                        case ERROR:
+                            logger.trace("Authenticated");
+                            send(out, BEGIN);                            
+                            state = SaslAuthState.AUTHENTICATED;
+                            break;
                         default:
-                            send(out, ERROR, c.getResponse());
+                            send(out, ERROR, "Got invalid command");
                             break;
                         }
-                        break;
-                    case REJECTED:
-                        failed |= current;
-                        int available = c.getMechs() & (~failed);
-                        if (0 != (available & AUTH_EXTERNAL)) {
-                            send(out, AUTH, "EXTERNAL", luid);
-                            current = AUTH_EXTERNAL;
-                        } else if (0 != (available & AUTH_SHA)) {
-                            send(out, AUTH, "DBUS_COOKIE_SHA1", luid);
-                            current = AUTH_SHA;
-                        } else if (0 != (available & AUTH_ANON)) {
-                            send(out, AUTH, "ANONYMOUS");
-                            current = AUTH_ANON;
-                        } else {
-                            state = SaslAuthState.FAILED;
-                        }
-                        break;
-                    case ERROR:
-                        send(out, CANCEL);
-                        state = SaslAuthState.WAIT_REJECT;
-                        break;
-                    case OK:
-                        send(out, BEGIN);
-                        state = SaslAuthState.AUTHENTICATED;
-                        break;
-                    default:
-                        send(out, ERROR, "Got invalid command");
-                        break;
-                    }
                     break;
                 case WAIT_OK:
                     c = receive(in);
@@ -514,25 +499,25 @@ public class SASL {
                 case WAIT_REJECT:
                     c = receive(in);
                     switch (c.getCommand()) {
-                    case REJECTED:
-                        failed |= current;
-                        int available = c.getMechs() & (~failed);
-                        if (0 != (available & AUTH_EXTERNAL)) {
-                            send(out, AUTH, "EXTERNAL", luid);
-                            current = AUTH_EXTERNAL;
-                        } else if (0 != (available & AUTH_SHA)) {
-                            send(out, AUTH, "DBUS_COOKIE_SHA1", luid);
-                            current = AUTH_SHA;
-                        } else if (0 != (available & AUTH_ANON)) {
-                            send(out, AUTH, "ANONYMOUS");
-                            current = AUTH_ANON;
-                        } else {
+                        case REJECTED:
+                            failed |= current;
+                            int available = c.getMechs() & (~failed);
+                            if (0 != (available & AUTH_EXTERNAL)) {
+                                send(out, AUTH, "EXTERNAL", luid);
+                                current = AUTH_EXTERNAL;
+                            } else if (0 != (available & AUTH_SHA)) {
+                                send(out, AUTH, "DBUS_COOKIE_SHA1", luid);
+                                current = AUTH_SHA;
+                            } else if (0 != (available & AUTH_ANON)) {
+                                send(out, AUTH, "ANONYMOUS");
+                                current = AUTH_ANON;
+                            } else {
+                                state = SaslAuthState.FAILED;
+                            }
+                        break;
+                        default:
                             state = SaslAuthState.FAILED;
-                        }
-                        break;
-                    default:
-                        state = SaslAuthState.FAILED;
-                        break;
+                            break;
                     }
                     break;
                 default:
@@ -541,34 +526,66 @@ public class SASL {
                 break;
             case SERVER:
                 switch (state) {
-                case INITIAL_STATE:
-                    byte[] buf = new byte[1];
-                    if (null == us) {
-                        in.read(buf);
-                    } else {
-
-                        Credentials credentials;
-                        try {
-                            credentials = us.getCredentials();
-                            int kuid = credentials.getUid();
-                            if (kuid >= 0) {
-                                kernelUid = stupidlyEncode("" + kuid);
+                    case INITIAL_STATE:
+                        byte[] buf = new byte[1];
+                        if (null == us) {
+                            in.read(buf);
+                        } else {
+    
+                            Credentials credentials;
+                            try {
+                                credentials = ((UnixSocket) us).getCredentials();
+                                int kuid = credentials.getUid();
+                                if (kuid >= 0) {
+                                    kernelUid = stupidlyEncode("" + kuid);
+                                }
+                                state = SaslAuthState.WAIT_AUTH;
+    
+                            } catch (SocketException _ex) {
+                                state = SaslAuthState.FAILED;
                             }
-                            state = SaslAuthState.WAIT_AUTH;
-
-                        } catch (SocketException _ex) {
-                            state = SaslAuthState.FAILED;
                         }
-                    }
                     break;
-                case WAIT_AUTH:
-                    c = receive(in);
+                    case WAIT_AUTH:
+                        c = receive(in);
+                        switch (c.getCommand()) {
+                            case AUTH:
+                                switch (doResponse(current, luid, kernelUid, c)) {
+                                    case CONTINUE:
+                                        send(out, DATA, c.getResponse());
+                                        current = c.getMechs();
+                                        state = SaslAuthState.WAIT_DATA;
+                                        break;
+                                    case OK:
+                                        send(out, SaslCommand.OK, guid);
+                                        state = SaslAuthState.WAIT_BEGIN;
+                                        current = 0;
+                                        break;
+                                    case REJECT:
+                                    default:
+                                        send(out, REJECTED, getTypes(types));
+                                        current = 0;
+                                        break;
+                                }
+                                break;
+                            case ERROR:
+                                send(out, REJECTED, getTypes(types));
+                                break;
+                            case BEGIN:
+                                state = SaslAuthState.FAILED;
+                                break;
+                            default:
+                                send(out, ERROR, "Got invalid command");
+                                break;
+                            }
+                    break;
+                    case WAIT_DATA:
+                        c = receive(in);
                     switch (c.getCommand()) {
-                    case AUTH:
+                    case DATA:
                         switch (doResponse(current, luid, kernelUid, c)) {
                             case CONTINUE:
                                 send(out, DATA, c.getResponse());
-                                current = c.getMechs();
                                 state = SaslAuthState.WAIT_DATA;
                                 break;
                             case OK:
@@ -581,72 +598,40 @@ public class SASL {
                                 send(out, REJECTED, getTypes(types));
                                 current = 0;
                                 break;
-                        }
+                            }
                         break;
-                    case ERROR:
-                        send(out, REJECTED, getTypes(types));
-                        break;
-                    case BEGIN:
-                        state = SaslAuthState.FAILED;
-                        break;
-                    default:
-                        send(out, ERROR, "Got invalid command");
-                        break;
-                    }
-                    break;
-                case WAIT_DATA:
-                    c = receive(in);
-                    switch (c.getCommand()) {
-                    case DATA:
-                        switch (doResponse(current, luid, kernelUid, c)) {
-                        case CONTINUE:
-                            send(out, DATA, c.getResponse());
-                            state = SaslAuthState.WAIT_DATA;
-                            break;
-                        case OK:
-                            send(out, SaslCommand.OK, guid);
-                            state = SaslAuthState.WAIT_BEGIN;
-                            current = 0;
-                            break;
-                        case REJECT:
-                        default:
+                        case ERROR:
+                        case CANCEL:
                             send(out, REJECTED, getTypes(types));
-                            current = 0;
+                            state = SaslAuthState.WAIT_AUTH;
+                        break;
+                        case BEGIN:
+                            state = SaslAuthState.FAILED;
+                        break;
+                        default:
+                            send(out, ERROR, "Got invalid command");
+                        break;
+                    }
+                    break;
+                    case WAIT_BEGIN:
+                        c = receive(in);
+                        switch (c.getCommand()) {
+                            case ERROR:
+                            case CANCEL:
+                                send(out, REJECTED, getTypes(types));
+                                state = SaslAuthState.WAIT_AUTH;
+                            break;
+                            case BEGIN:
+                                    state = SaslAuthState.AUTHENTICATED;
+                            break;
+                            default:
+                                send(out, ERROR, "Got invalid command");
                             break;
                         }
-                        break;
-                    case ERROR:
-                    case CANCEL:
-                        send(out, REJECTED, getTypes(types));
-                        state = SaslAuthState.WAIT_AUTH;
-                        break;
-                    case BEGIN:
+                    break;
+                    default:
                         state = SaslAuthState.FAILED;
-                        break;
-                    default:
-                        send(out, ERROR, "Got invalid command");
-                        break;
                     }
-                    break;
-                case WAIT_BEGIN:
-                    c = receive(in);
-                    switch (c.getCommand()) {
-                    case ERROR:
-                    case CANCEL:
-                        send(out, REJECTED, getTypes(types));
-                        state = SaslAuthState.WAIT_AUTH;
-                        break;
-                    case BEGIN:
-                        state = SaslAuthState.AUTHENTICATED;
-                        break;
-                    default:
-                        send(out, ERROR, "Got invalid command");
-                        break;
-                    }
-                    break;
-                default:
-                    state = SaslAuthState.FAILED;
-                }
                 break;
             default:
                 return false;

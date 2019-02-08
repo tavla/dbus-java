@@ -63,27 +63,30 @@ import com.github.hypfvieh.util.SystemUtil;
  * </p>
  */
 public final class DBusConnection extends AbstractConnection {
-    private final Logger                             logger                     = LoggerFactory.getLogger(getClass());
+    private final Logger                                       logger                     =
+            LoggerFactory.getLogger(getClass());
 
-    public static final String                       DEFAULT_SYSTEM_BUS_ADDRESS =
+    public static final String                                 DEFAULT_SYSTEM_BUS_ADDRESS =
             "unix:path=/var/run/dbus/system_bus_socket";
 
-    private List<String>                             busnames;
+    private List<String>                                       busnames;
 
     private static final ConcurrentMap<String, DBusConnection> CONNECTIONS                = new ConcurrentHashMap<>();
-    private DBus                                     dbus;
+    private DBus                                               dbus;
 
-    private final String                             machineId;
+    private final String                                       machineId;
 
-    /** Count how many 'connections' we manage internally.
-     * This is required because a {@link DBusConnection} to the same address will always return the same object and
-     * the 'real' disconnection should only occur when there is no second/third/whatever connection is left. */
-    private final AtomicInteger                      concurrentConnections              = new AtomicInteger(1);
+    /**
+     * Count how many 'connections' we manage internally. This is required because a {@link DBusConnection} to the same
+     * address will always return the same object and the 'real' disconnection should only occur when there is no
+     * second/third/whatever connection is left.
+     */
+    private final AtomicInteger                                concurrentConnections      = new AtomicInteger(1);
 
     /**
      * Whether this connection is used in shared mode.
      */
-    private final boolean shared;
+    private final boolean                                      shared;
 
     /**
      * Connect to the BUS. If a connection already exists to the specified Bus, a reference to it is returned. Will
@@ -286,7 +289,7 @@ public final class DBusConnection extends AbstractConnection {
         machineId = _machineId;
         shared = _shared;        		
         // start listening for calls
-        listen();
+        //listen();
 
         // register disconnect handlers
         DBusSigHandler<?> h = new SigHandler();
@@ -298,9 +301,9 @@ public final class DBusConnection extends AbstractConnection {
             dbus = getRemoteObject("org.freedesktop.DBus", "/org/freedesktop/DBus", DBus.class);
             try {
                 busnames.add(dbus.Hello());
-            } catch (DBusExecutionException dbee) {
-                logger.debug("", dbee);
-                throw new DBusException(dbee.getMessage());
+            } catch (DBusExecutionException _ex) {
+                logger.debug("Failed registering to Dbus.", _ex);
+                throw new DBusException(_ex);
             }
         }
     }
@@ -396,13 +399,14 @@ public final class DBusConnection extends AbstractConnection {
         if (!_busname.matches(BUSNAME_REGEX) || _busname.length() > MAX_NAME_LENGTH) {
             throw new DBusException("Invalid bus name");
         }
+        try {
+            dbus.ReleaseName(_busname);
+        } catch (DBusExecutionException _ex) {
+            logger.debug("Error while releasing busname.", _ex);
+            throw new DBusException(_ex);
+        }
+
         synchronized (this.busnames) {
-            try {
-                dbus.ReleaseName(_busname);
-            } catch (DBusExecutionException dbee) {
-                logger.debug("", dbee);
-                throw new DBusException(dbee.getMessage());
-            }
             this.busnames.remove(_busname);
         }
     }
@@ -420,16 +424,17 @@ public final class DBusConnection extends AbstractConnection {
         if (!_busname.matches(BUSNAME_REGEX) || _busname.length() > MAX_NAME_LENGTH) {
             throw new DBusException("Invalid bus name");
         }
-        synchronized (this.busnames) {
-            UInt32 rv;
-            try {
-                rv = dbus.RequestName(_busname,
-                        new UInt32(DBus.DBUS_NAME_FLAG_REPLACE_EXISTING | DBus.DBUS_NAME_FLAG_DO_NOT_QUEUE));
-            } catch (DBusExecutionException dbee) {
-                logger.debug("", dbee);
-                throw new DBusException(dbee.getMessage());
-            }
-            switch (rv.intValue()) {
+        
+        UInt32 rv;
+        try {
+            rv = dbus.RequestName(_busname,
+                    new UInt32(DBus.DBUS_NAME_FLAG_REPLACE_EXISTING | DBus.DBUS_NAME_FLAG_DO_NOT_QUEUE));
+        } catch (DBusExecutionException _ex) {
+            logger.debug("Error while requesting name.", _ex);
+            throw new DBusException(_ex);
+        }
+        
+        switch (rv.intValue()) {
             case DBus.DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER:
                 break;
             case DBus.DBUS_REQUEST_NAME_REPLY_IN_QUEUE:
@@ -440,11 +445,14 @@ public final class DBusConnection extends AbstractConnection {
                 break;
             default:
                 break;
-            }
+        }
+            
+        synchronized (this.busnames) {
             this.busnames.add(_busname);
         }
     }
-
+    
+    
     /**
      * Returns the unique name of this connection.
      *
@@ -849,9 +857,9 @@ public final class DBusConnection extends AbstractConnection {
             throws DBusException {
         try {
             dbus.AddMatch(_rule.toString());
-        } catch (DBusExecutionException dbee) {
-            logger.debug("", dbee);
-            throw new DBusException(dbee.getMessage());
+        } catch (DBusExecutionException _ex) {
+            logger.debug("", _ex);
+            throw new DBusException(_ex);
         }
         SignalTuple key = new SignalTuple(_rule.getInterface(), _rule.getMember(), _rule.getObject(), _rule.getSource());
         synchronized (getHandledSignals()) {
@@ -1005,7 +1013,9 @@ public final class DBusConnection extends AbstractConnection {
                 } catch (DBusException exDb) {
                 }
             } else if (_signal instanceof org.freedesktop.DBus.NameAcquired) {
-                busnames.add(((org.freedesktop.DBus.NameAcquired) _signal).name);
+                synchronized (busnames) {
+                    busnames.add(((org.freedesktop.DBus.NameAcquired) _signal).name);
+                }
             }
         }
     }

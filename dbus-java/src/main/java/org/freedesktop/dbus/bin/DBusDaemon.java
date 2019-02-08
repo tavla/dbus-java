@@ -21,7 +21,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
-import java.nio.channels.Channels;
+import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -35,11 +35,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.freedesktop.DBus;
 import org.freedesktop.Hexdump;
 import org.freedesktop.dbus.Marshalling;
-import org.freedesktop.dbus.MessageReader;
-import org.freedesktop.dbus.MessageWriter;
+import org.freedesktop.dbus.MessageHandler;
 import org.freedesktop.dbus.connections.BusAddress;
-import org.freedesktop.dbus.connections.Transport;
 import org.freedesktop.dbus.connections.impl.DirectConnection;
+import org.freedesktop.dbus.connections.transports.AbstractTransport;
 import org.freedesktop.dbus.errors.Error;
 import org.freedesktop.dbus.errors.MatchRuleInvalid;
 import org.freedesktop.dbus.exceptions.DBusException;
@@ -70,21 +69,18 @@ public class DBusDaemon extends Thread implements Closeable {
         // CHECKSTYLE:OFF
         public UnixSocketChannel    usock;
         public Socket        tsock;
-        public MessageReader min;
-        public MessageWriter mout;
+        public MessageHandler mhan;
         public String        unique;
         // CHECKSTYLE:ON
 
         Connstruct(UnixSocketChannel sock) {
+            mhan = new MessageHandler();
             this.usock = sock;
-            min = new MessageReader(Channels.newInputStream(sock));
-            mout = new MessageWriter(Channels.newOutputStream(sock), true);
         }
 
         Connstruct(Socket sock) throws IOException {
+            mhan = new MessageHandler();
             this.tsock = sock;
-            min = new MessageReader(sock.getInputStream());
-            mout = new MessageWriter(sock.getOutputStream(), false);
         }
 
         @Override
@@ -582,7 +578,10 @@ public class DBusDaemon extends Thread implements Closeable {
                             logger.info("Sending message {} to {}", m, c.unique);
 
                             try {
-                                c.mout.writeMessage(m);
+                                ByteBuffer buf = ByteBuffer.allocate(1024);
+                                c.mhan.writeMessage(m, buf);
+                                c.usock.write(buf);
+                                // TODO: write buffer to socket
                             } catch (IOException ioe) {
                                 logger.debug("", ioe);
                                 removeConnection(c);
@@ -623,7 +622,13 @@ public class DBusDaemon extends Thread implements Closeable {
 
                 Message m = null;
                 try {
-                    m = conn.min.readMessage();
+                    ByteBuffer localBuf = ByteBuffer.allocate(2048);
+                    int read = conn.usock.read(localBuf);
+                    if (read == -1) {
+                        throw new IOException("Unexpected end of file");
+                    }
+                    localBuf.flip();
+                    m = conn.mhan.readMessage(localBuf);
                 } catch (IOException ioe) {
                     LOGGER.debug("", ioe);
                     removeConnection(conn);
@@ -950,8 +955,8 @@ public class DBusDaemon extends Thread implements Closeable {
         }
 
         BusAddress address = new BusAddress(addr);
-        if (null == address.getParameter("guid")) {
-            addr += ",guid=" + Transport.genGUID();
+        if (null == address.getGuid()) {
+            addr += ",guid=" + AbstractTransport.genGUID();
             address = new BusAddress(addr);
         }
 

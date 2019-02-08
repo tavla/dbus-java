@@ -139,13 +139,16 @@ public class RemoteInvocationHandler implements InvocationHandler {
 
         switch (syncmethod) {
             case CALL_TYPE_ASYNC:
+                LOGGER.trace("Retrieving method return asynchroniously");
                 conn.sendMessage(call);
                 return new DBusAsyncReply<>(call, m, conn);
             case CALL_TYPE_CALLBACK:
+                LOGGER.trace("Retrieving method return by callback");
                 conn.queueCallback(call, m, callback);
                 conn.sendMessage(call);
                 return null;
             case CALL_TYPE_SYNC:
+                LOGGER.trace("Retrieving method return synchroniously");
                 conn.sendMessage(call);
                 break;
         }
@@ -155,12 +158,15 @@ public class RemoteInvocationHandler implements InvocationHandler {
             return null;
         }
 
+        LOGGER.trace("Waiting for method return");
         Message reply = call.getReply();
         if (null == reply) {
+            LOGGER.trace("No message return within specified time");
             throw new NoReply("No reply within specified time");
         }
 
         if (reply instanceof Error) {
+            LOGGER.trace("Method returned an error");
             ((Error) reply).throwException();
         }
 
