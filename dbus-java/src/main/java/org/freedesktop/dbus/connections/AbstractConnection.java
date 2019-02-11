@@ -30,11 +30,6 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 import org.freedesktop.dbus.DBusAsyncReply;
@@ -66,8 +61,6 @@ import org.freedesktop.dbus.messages.ObjectTree;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.github.hypfvieh.threads.NameableThreadFactory;
-
 /**
  * Handles a connection to DBus.
  */
@@ -78,10 +71,6 @@ public abstract class AbstractConnection implements Closeable {
      * Timeout in µs on checking the BUS for incoming messages and sending outgoing messages
      */
     private static final int                       TIMEOUT     = 100000;
-    /**
-     * Default thread pool size
-     */
-    private static final int         THREADCOUNT = 4;
 
     public static final boolean      FLOAT_SUPPORT    =    (null != System.getenv("DBUS_JAVA_FLOATS"));
     public static final String       BUSNAME_REGEX    = "^[-_a-zA-Z][-_a-zA-Z0-9]*(\\.[-_a-zA-Z][-_a-zA-Z0-9]*)*$";
@@ -115,8 +104,6 @@ public abstract class AbstractConnection implements Closeable {
     private boolean                                                            connected        = false;
 
     private AbstractTransport                                                  transport;
-    private ExecutorService                                                    workerThreadPool;
-    private ExecutorService                                                    senderService;
 
     protected AbstractConnection(String address) throws DBusException {
         exportedObjects = new HashMap<>();
@@ -130,74 +117,7 @@ public abstract class AbstractConnection implements Closeable {
         callbackManager = new PendingCallbackManager();
 
         pendingErrorQueue = new ConcurrentLinkedQueue<>();
-        workerThreadPool =
-                new ThreadPoolExecutor(THREADCOUNT, THREADCOUNT,
-                        0L, TimeUnit.MILLISECONDS,
-                        new LinkedBlockingQueue<Runnable>(),
-                        new NameableThreadFactory("DBus Worker Thread-", false) {
-                            @Override
-                            public Thread newThread(Runnable _r) {
-                                Thread newThread = super.newThread(_r);
-                                newThread.setUncaughtExceptionHandler((t, e) -> {
-                                    logger.error("Uncaught exception in thread {}.", t.getName(), e);
-                                });
-                                return newThread;
-                            }
-                        }) {
-
-                            @Override
-                            protected void afterExecute(Runnable _r, Throwable _t) {
-                                if (_t != null) {
-                                    logger.error("Unexpected exception in worker: ", _t);
-                                }
-                            }
-            
-        };
-                
-                
-//                Executors.newFixedThreadPool(THREADCOUNT, new NameableThreadFactory("DBus Worker Thread-", false) {
-//                    @Override
-//                    public Thread newThread(Runnable _r) {
-//                        Thread newThread = super.newThread(_r);
-//                        newThread.setUncaughtExceptionHandler((t, e) -> {
-//                            logger.error("Uncaught exception in thread {}.", t.getName(), e);
-//                        });
-//                        return newThread;
-//                    }
-//                });
-
-        senderService =
-                new ThreadPoolExecutor(1, THREADCOUNT,
-                        0L, TimeUnit.MILLISECONDS,
-                        new LinkedBlockingQueue<Runnable>(),
-                        new NameableThreadFactory("DBus Sender Thread-", false) {
-                            @Override
-                            public Thread newThread(Runnable _r) {
-                                Thread newThread = super.newThread(_r);
-                                newThread.setUncaughtExceptionHandler((t, e) -> {
-                                    logger.error("Uncaught exception in thread {}.", t.getName(), e);
-                                });
-                                return newThread;
-                            }
-                        }) {
-                    @Override
-                    protected void afterExecute(Runnable _r, Throwable _t) {
-                        if (_t != null) {
-                            logger.error("Unexpected exception in sender thread: ", _t);
-                        }
-                    }
-                };
-//                Executors.newFixedThreadPool(1, new NameableThreadFactory("DBus Sender Thread-", false) {
-//                    @Override
-//                    public Thread newThread(Runnable _r) {
-//                        Thread newThread = super.newThread(_r);
-//                        newThread.setUncaughtExceptionHandler((t, e) -> {
-//                            logger.error("Uncaught exception in thread {}.", t.getName(), e);
-//                        });
-//                        return newThread;
-//                    }
-//                });
-
+        
         objectTree = new ObjectTree();
         fallbackContainer = new FallbackContainer();
 
@@ -235,23 +155,6 @@ public abstract class AbstractConnection implements Closeable {
 //        readerThread.start();
 //    }
 
-    /**
-     * Change the number of worker threads to receive method calls and handle signals. Default is 4 threads
-     *
-     * @param newcount
-     *            The new number of worker Threads to use.
-     */
-    public void changeThreadCount(byte newcount) {
-        if (newcount != THREADCOUNT) {
-            List<Runnable> remainingTasks = workerThreadPool.shutdownNow(); // kill previous threadpool
-            workerThreadPool =
-                    Executors.newFixedThreadPool(newcount, new NameableThreadFactory("DbusWorkerThreads", false));
-            // re-schedule previously waiting tasks
-            for (Runnable runnable : remainingTasks) {
-                workerThreadPool.execute(runnable);
-            }
-        }
-    }
 
     public String getExportedObject(DBusInterface _interface) throws DBusException {
 
@@ -366,14 +269,7 @@ public abstract class AbstractConnection implements Closeable {
      * @param _message message to send
      */
     public void sendMessage(Message _message) {
-    	Runnable runnable = new Runnable() {
-			@Override
-			public void run() {
-				sendMessageInternally(_message);
-			}
-    	};
-
-    	senderService.execute(runnable);
+        sendMessageInternally(_message);
     }
 
     /**
@@ -516,20 +412,6 @@ public abstract class AbstractConnection implements Closeable {
 
         logger.debug("Disconnecting Connection");
 
-        try {
-            // try to wait for all pending tasks.
-            workerThreadPool.shutdown();
-            workerThreadPool.awaitTermination(10, TimeUnit.SECONDS); // 10 seconds should be enough, otherwise fail
-
-        } catch (InterruptedException _ex) {
-            logger.error("Interrupted while waiting for worker threads to be terminated.", _ex);
-        }
-
-        // shutdown sender executor service, send all remaining messages in main thread
-        for (Runnable runnable : senderService.shutdownNow()) {
-			runnable.run();
-		}
-
         connected = false;
 
         // disconnect from the transport layer
@@ -540,11 +422,6 @@ public abstract class AbstractConnection implements Closeable {
             }
         } catch (IOException exIo) {
             logger.debug("Exception while disconnecting transport.", exIo);
-        }
-
-        // stop all the workers
-        if (!workerThreadPool.isTerminated()) { // try forceful shutdown
-            workerThreadPool.shutdownNow();
         }
 
     }
@@ -740,70 +617,62 @@ public abstract class AbstractConnection implements Closeable {
         final Object ob = o;
         final boolean noreply = (1 == (m.getFlags() & Message.Flags.NO_REPLY_EXPECTED));
         final DBusCallInfo info = new DBusCallInfo(m);
-        final AbstractConnection conn = this;
 
-        logger.trace("Adding Runnable for method {}", meth);
-        Runnable r = new Runnable() {
+        logger.debug("Running method {} for remote call", me);
+        if (me == null) {
+        	logger.debug("Cannot run method - method variable was null");
+        	return;
+        }
+        try {
+            Type[] ts = me.getGenericParameterTypes();
+            m.setArgs(Marshalling.deSerializeParameters(m.getParameters(), ts, this));
+            logger.trace("Deserialised {} to types {}", Arrays.deepToString(m.getParameters()), Arrays.deepToString(ts));
+        } catch (Exception e) {
+            logger.debug("", e);
+            handleException(this, m, new UnknownMethod("Failure in de-serializing message: " + e));
+            return;
+        }
 
-            @Override
-            public void run() {
-                logger.debug("Running method {} for remote call", me);
-                if (me == null) {
-                	logger.debug("Cannot run method - method variable was null");
-                	return;
-                }
-                try {
-                    Type[] ts = me.getGenericParameterTypes();
-                    m.setArgs(Marshalling.deSerializeParameters(m.getParameters(), ts, conn));
-                    logger.trace("Deserialised {} to types {}", Arrays.deepToString(m.getParameters()), Arrays.deepToString(ts));
-                } catch (Exception e) {
-                    logger.debug("", e);
-                    handleException(conn, m, new UnknownMethod("Failure in de-serializing message: " + e));
-                    return;
-                }
-
-                try {
-                    INFOMAP.put(Thread.currentThread(), info);
-                    Object result;
-                    try {
-                        logger.trace("Invoking Method: {} on {} with parameters {}", me, ob, Arrays.deepToString(m.getParameters()));
-                        result = me.invoke(ob, m.getParameters());
-                    } catch (InvocationTargetException ite) {
-                        logger.debug(ite.getMessage(), ite);
-                        throw ite.getCause();
-                    }
-                    INFOMAP.remove(Thread.currentThread());
-                    if (!noreply) {
-                        MethodReturn reply;
-                        if (Void.TYPE.equals(me.getReturnType())) {
-                            reply = new MethodReturn(m, null);
-                        } else {
-                            StringBuffer sb = new StringBuffer();
-                            for (String s : Marshalling.getDBusType(me.getGenericReturnType())) {
-                                sb.append(s);
-                            }
-                            Object[] nr = Marshalling.convertParameters(new Object[] {
-                                    result
-                            }, new Type[] {
-                                    me.getGenericReturnType()
-                            }, conn);
-
-                            reply = new MethodReturn(m, sb.toString(), nr);
-                        }
-                        conn.sendMessage(reply);
-                    }
-                } catch (DBusExecutionException exDee) {
-                    logger.debug("", exDee);
-                    handleException(conn, m, exDee);
-                } catch (Throwable e) {
-                    logger.debug("", e);
-                    handleException(conn, m,
-                            new DBusExecutionException(String.format("Error Executing Method %s.%s: %s",
-                                    m.getInterface(), m.getName(), e.getMessage())));
-                }
+        try {
+            INFOMAP.put(Thread.currentThread(), info);
+            Object result;
+            try {
+                logger.trace("Invoking Method: {} on {} with parameters {}", me, ob, Arrays.deepToString(m.getParameters()));
+                result = me.invoke(ob, m.getParameters());
+            } catch (InvocationTargetException ite) {
+                logger.debug(ite.getMessage(), ite);
+                throw ite.getCause();
             }
-        };
-        workerThreadPool.execute(r);
+            INFOMAP.remove(Thread.currentThread());
+            if (!noreply) {
+                MethodReturn reply;
+                if (Void.TYPE.equals(me.getReturnType())) {
+                    reply = new MethodReturn(m, null);
+                } else {
+                    StringBuffer sb = new StringBuffer();
+                    for (String s : Marshalling.getDBusType(me.getGenericReturnType())) {
+                        sb.append(s);
+                    }
+                    Object[] nr = Marshalling.convertParameters(new Object[] {
+                            result
+                    }, new Type[] {
+                            me.getGenericReturnType()
+                    }, this);
+
+                    reply = new MethodReturn(m, sb.toString(), nr);
+                }
+                this.sendMessage(reply);
+            }
+        } catch (DBusExecutionException exDee) {
+            logger.debug("", exDee);
+            handleException(this, m, exDee);
+        } catch (Throwable e) {
+            logger.debug("", e);
+            handleException(this, m,
+                    new DBusExecutionException(String.format("Error Executing Method %s.%s: %s",
+                            m.getInterface(), m.getName(), e.getMessage())));
+        }
+    
     }
 
     /**
@@ -816,7 +685,7 @@ public abstract class AbstractConnection implements Closeable {
             "unchecked"
     })
     private void handleMessage(final DBusSignal _signal, boolean _useThreadPool) {
-        logger.debug("Handling incoming signal: ", _signal);
+        logger.debug("Handling incoming signal: {}", _signal);
 
         List<DBusSigHandler<? extends DBusSignal>> handlers = new ArrayList<>();
         List<DBusSigHandler<DBusSignal>> genericHandlers = new ArrayList<>();
@@ -866,48 +735,26 @@ public abstract class AbstractConnection implements Closeable {
 
         final AbstractConnection conn = this;
         for (final DBusSigHandler<? extends DBusSignal> h : handlers) {
-            logger.trace("Adding Runnable for signal {} with handler {}",  _signal, h);
-            Runnable command = new Runnable() {
-
-                @Override
-                public void run() {
-                    try {
-                        DBusSignal rs;
-                        if (_signal instanceof InternalSignal || _signal.getClass().equals(DBusSignal.class)) {
-                            rs = _signal.createReal(conn);
-                        } else {
-                            rs = _signal;
-                        }
-                        ((DBusSigHandler<DBusSignal>) h).handle(rs);
-                        logger.trace("Signal {} handled", _signal);
-                    } catch (DBusException _ex) {
-                        logger.warn("Exception while running signal handler '{}' for signal '{}':", h, _signal, _ex);
-                        handleException(conn, _signal, new DBusExecutionException("Error handling signal " + _signal.getInterface()
-                                + "." + _signal.getName() + ": " + _ex.getMessage()));
-                    }
+            logger.trace("Handling signal {} with handler {}",  _signal, h);
+            try {
+                DBusSignal rs;
+                if (_signal instanceof InternalSignal || _signal.getClass().equals(DBusSignal.class)) {
+                    rs = _signal.createReal(conn);
+                } else {
+                    rs = _signal;
                 }
-            };
-            if (_useThreadPool) {
-                workerThreadPool.execute(command);
-            } else {
-                command.run();
+                ((DBusSigHandler<DBusSignal>) h).handle(rs);
+                logger.trace("Signal {} handled", _signal);
+            } catch (DBusException _ex) {
+                logger.warn("Exception while running signal handler '{}' for signal '{}':", h, _signal, _ex);
+                handleException(conn, _signal, new DBusExecutionException("Error handling signal " + _signal.getInterface()
+                        + "." + _signal.getName() + ": " + _ex.getMessage()));
             }
         }
 
         for (final DBusSigHandler<DBusSignal> h : genericHandlers) {
-            logger.trace("Adding Runnable for signal {} with handler {}",  _signal, h);
-            Runnable command = new Runnable() {
-
-                @Override
-                public void run() {
-                    h.handle(_signal);
-                }
-            };
-            if (_useThreadPool) {
-                workerThreadPool.execute(command);
-            } else {
-                command.run();
-            }
+            logger.trace("Executing handler {} for signal {}",  h, _signal);
+            h.handle(_signal);
         }
     }
 
@@ -931,25 +778,17 @@ public abstract class AbstractConnection implements Closeable {
             // queue callback for execution
             if (null != cbh) {
                 final CallbackHandler<?> fcbh = cbh;
-                logger.trace("Adding Error Runnable with callback handler {}", fcbh);
-                Runnable command = new Runnable() {
+                try {
+                    logger.trace("Running Error Callback for {}", err);
+                    DBusCallInfo info = new DBusCallInfo(err);
+                    INFOMAP.put(Thread.currentThread(), info);
 
-                    @Override
-                    public synchronized void run() {
-                        try {
-                            logger.trace("Running Error Callback for {}", err);
-                            DBusCallInfo info = new DBusCallInfo(err);
-                            INFOMAP.put(Thread.currentThread(), info);
+                    fcbh.handleError(err.getException());
+                    INFOMAP.remove(Thread.currentThread());
 
-                            fcbh.handleError(err.getException());
-                            INFOMAP.remove(Thread.currentThread());
-
-                        } catch (Exception e) {
-                            logger.debug("Exception while running error callback.", e);
-                        }
-                    }
-                };
-                workerThreadPool.execute(command);
+                } catch (Exception e) {
+                    logger.debug("Exception while running error callback.", e);
+                }                
             }
 
         } else {
@@ -982,27 +821,20 @@ public abstract class AbstractConnection implements Closeable {
                 	logger.debug("Cannot add runnable for method, given method callback was null");
                 	return;
                 }
-                logger.trace("Adding Runnable for method {} with callback handler {}", fcbh,
-                        fasr != null ? fasr.getMethod() : null);
-                Runnable r = new Runnable() {
+                
+                try {
+                    logger.trace("Running method {} with callback handler {}", fcbh,
+                            fasr != null ? fasr.getMethod() : null);
+                    DBusCallInfo info = new DBusCallInfo(mr);
+                    INFOMAP.put(Thread.currentThread(), info);
+                    Object convertRV = RemoteInvocationHandler.convertRV(mr.getSig(), mr.getParameters(),
+                            fasr.getMethod(), fasr.getConnection());
+                    fcbh.handle(convertRV);
+                    INFOMAP.remove(Thread.currentThread());
 
-                    @Override
-                    public synchronized void run() {
-                        try {
-                            logger.trace("Running Callback for {}", mr);
-                            DBusCallInfo info = new DBusCallInfo(mr);
-                            INFOMAP.put(Thread.currentThread(), info);
-                            Object convertRV = RemoteInvocationHandler.convertRV(mr.getSig(), mr.getParameters(),
-                                    fasr.getMethod(), fasr.getConnection());
-                            fcbh.handle(convertRV);
-                            INFOMAP.remove(Thread.currentThread());
-
-                        } catch (Exception e) {
-                            logger.debug("Exception while running callback.", e);
-                        }
-                    }
-                };
-                workerThreadPool.execute(r);
+                } catch (Exception e) {
+                    logger.debug("Exception while running callback.", e);
+                }
             }
 
         } else

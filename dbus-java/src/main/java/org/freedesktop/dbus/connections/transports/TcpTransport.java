@@ -2,8 +2,10 @@ package org.freedesktop.dbus.connections.transports;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.channels.SelectableChannel;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 
 import org.freedesktop.dbus.connections.BusAddress;
 import org.freedesktop.dbus.connections.SASL;
@@ -17,22 +19,27 @@ public class TcpTransport extends AbstractTransport {
         setSaslAuthMode(SASL.AUTH_SHA);
     }
 
-    void connect() throws IOException {
-        
+    @Override
+    SelectableChannel connect() throws IOException {
+        SocketChannel socketChannel;
         if (getAddress().isListeningSocket()) {
-            try (ServerSocket ss = new ServerSocket()) {
-                ss.bind(new InetSocketAddress(getAddress().getHost(), getAddress().getPort()));
-                socket = ss.accept();
-            }
+            ServerSocketChannel ss = ServerSocketChannel.open();
+            ss.bind(new InetSocketAddress(getAddress().getHost(), getAddress().getPort()));
+            socketChannel = ss.accept();
         } else {
-            socket = new Socket();
-            socket.connect(new InetSocketAddress(getAddress().getHost(), getAddress().getPort()));
+            socketChannel = SocketChannel.open();
+            socketChannel.connect(new InetSocketAddress(getAddress().getHost(), getAddress().getPort()));
+            
         }
+        socketChannel.configureBlocking(true);
 
         getLogger().trace("Setting timeout to {} on Socket", getTimeout());
         socket.setSoTimeout(getTimeout());
-
+        
         authenticate(socket.getOutputStream(), socket.getInputStream(), socket);
+        
+        socketChannel.configureBlocking(false);
+        return socketChannel;
     }
 
     @Override

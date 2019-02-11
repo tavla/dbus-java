@@ -47,9 +47,8 @@ public abstract class AbstractTransport implements Closeable {
 
     private SaslMode          mode         = SaslMode.CLIENT;
     private int               saslAuthMode = SASL.AUTH_NONE;
-    private SelectableChannel channel;
 
-    private Thread            readerThread;
+    private TransportReader   readerThread;
     
     AbstractTransport(BusAddress _address, int _timeout) {
         address = _address;
@@ -70,19 +69,9 @@ public abstract class AbstractTransport implements Closeable {
         return guid.replaceAll(" ", "");
     }
 
-    public void writeMessage(Message message) throws IOException {
-        ByteBuffer buf = ByteBuffer.allocate(256);
-        buf.clear();
-        
-        MessageHandler.writeMessage(message, buf);
-        buf.flip();
-        
-        while (buf.hasRemaining()) {
-            ((SocketChannel) channel).write(buf);
-        }
-    }
+   
 
-    abstract void connect() throws IOException;
+    abstract SelectableChannel connect() throws IOException;
     
     protected void authenticate(OutputStream _out, InputStream _in, Socket _sock) throws IOException {
         if (!(new SASL()).auth(mode, saslAuthMode, address.getGuid(), _out, _in, _sock)) {
@@ -92,69 +81,12 @@ public abstract class AbstractTransport implements Closeable {
     }
 
     public void start(AbstractConnection _connection) throws IOException {
-        connect();
-        readerThread = new Thread(() -> {
-            try {
-                Selector sel = NativeSelectorProvider.getInstance().openSelector();
-                SelectionKey acceptKey;
-                if (channel instanceof ServerSocketChannel) { 
-                    acceptKey = channel.register(sel, SelectionKey.OP_ACCEPT);
-                } else {
-                    acceptKey = channel.register(sel, SelectionKey.OP_READ | SelectionKey.OP_WRITE);                    
-                }
-
-                while (acceptKey.selector().select() > 0) {
-                    Set<SelectionKey> readyKeys = sel.selectedKeys();
-                    Iterator<SelectionKey> it = readyKeys.iterator();
-
-                    while (it.hasNext()) {
-                        SelectionKey key = (SelectionKey) it.next();
-                        it.remove();
-
-                        if (key.isAcceptable()) {
-                            ServerSocketChannel ssc = (ServerSocketChannel) key.channel();
-                            SocketChannel socket = (SocketChannel) ssc.accept();
-                            socket.configureBlocking(false);
-                            logger.debug("New connection from {}", socket.getRemoteAddress());
-
-                            socket.register(sel, SelectionKey.OP_READ);                            
-                        }
-                        
-                        if (key.isReadable()) {
-                            SocketChannel x = (SocketChannel) key.channel();
-                            
-                            ByteBuffer localBuf = ByteBuffer.allocate(512);
-                            localBuf.clear();
-                            int read = x.read(localBuf);
-                            
-                            if (read == -1) {
-                                logger.error("Unexpected end of file");
-                            } else {
-                                localBuf.flip();
-                                Message readMessage = MessageHandler.readMessage(localBuf);
-                                _connection.handleMessage(readMessage);
-                            }
-                        }
-                    }                
-                }
-                logger.trace("Leaving selector loop");
-            }  catch (Exception _ex) {
-                getLogger().error("Thread terminated", _ex);
-            }
-        }, "Transport Reader Thread");
+        SelectableChannel channel = connect();
+        readerThread = new TransportReader(channel, _connection);
         
-        readerThread.setDaemon(true);
         readerThread.start();
     }
     
-    protected SelectableChannel getChannel() {
-        return channel;
-    }
-
-    protected void setChannel(SelectableChannel _channel) {
-        channel = _channel;
-    }
-
     protected int getSaslAuthMode() {
         return saslAuthMode;
     }
@@ -178,22 +110,107 @@ public abstract class AbstractTransport implements Closeable {
     public synchronized void disconnect() throws IOException {
         close();
     }
-
-    public boolean isConnected() {
-        return channel.isOpen();
-    }
-
+   
     protected Logger getLogger() {
         return logger;
     }
 
+    public void writeMessage(Message _m) throws IOException {
+        readerThread.writeMessage(_m);
+    }
+
+    
     @Override
     public void close() throws IOException {
-        if (channel != null && channel.isOpen()) {
-            channel.close();
-        }
         if (readerThread != null) {
             readerThread.interrupt();
         }
     }
+    
+    static class TransportReader extends Thread {
+        private final Logger      logger       = LoggerFactory.getLogger(getClass());
+        private final SelectableChannel channel;
+        private final AbstractConnection connection;
+        
+        private TransportReader(SelectableChannel _channel, AbstractConnection _connection) {
+            channel = _channel;
+            connection = _connection;
+            setDaemon(true);
+            setName("Transport Reader Thread");
+        }
+        
+        public void writeMessage(Message message) throws IOException {
+            ByteBuffer buf = ByteBuffer.allocate(256);
+            buf.clear();
+            
+            MessageHandler.writeMessage(message, buf);
+            buf.flip();
+            
+            logger.trace("Sending message {}", message);
+            
+            while (buf.hasRemaining()) {
+                int writtenBytes = ((SocketChannel) channel).write(buf);
+                if (writtenBytes < buf.limit()) {
+                    logger.warn("Could not write complete message to channel, only {} bytes of {} bytes written", writtenBytes, buf.limit());
+                }
+            }
+        }
+        
+        @Override
+        public void run() {
+            logger.debug("Channel reader thread starting");
+            try {
+                Selector sel = NativeSelectorProvider.getInstance().openSelector();
+                SelectionKey acceptKey;
+                if (channel instanceof ServerSocketChannel) { 
+                    acceptKey = channel.register(sel, SelectionKey.OP_ACCEPT);
+                } else {
+                    acceptKey = channel.register(sel, SelectionKey.OP_READ | SelectionKey.OP_WRITE);                    
+                }
+
+                while (acceptKey.selector().select() > 0) {
+                    Set<SelectionKey> readyKeys = sel.selectedKeys();
+                    Iterator<SelectionKey> it = readyKeys.iterator();
+
+                    while (it.hasNext()) {
+                        SelectionKey key = (SelectionKey) it.next();
+                        it.remove();
+
+                        if (key.isAcceptable()) {
+                            logger.trace("Acceptor channel, waiting for client");
+                            ServerSocketChannel ssc = (ServerSocketChannel) key.channel();
+                            SocketChannel socket = (SocketChannel) ssc.accept();
+                            socket.configureBlocking(false);
+                            logger.debug("New connection from {}", socket.getRemoteAddress());
+
+                            socket.register(sel, SelectionKey.OP_READ | SelectionKey.OP_WRITE);                            
+                        }
+                        
+                        if (key.isReadable()) {
+                            logger.trace("Received readable content on channel");
+                            SocketChannel x = (SocketChannel) key.channel();
+                            
+                            ByteBuffer localBuf = ByteBuffer.allocate(512);
+                            localBuf.clear();
+                            int read = x.read(localBuf);
+                            
+                            if (read == -1) {
+                                logger.error("Unexpected end of file");
+                            } else {
+                                localBuf.flip();
+                                Message readMessage = MessageHandler.readMessage(localBuf);
+                                connection.handleMessage(readMessage);
+                                logger.trace("Handled incoming message {}", readMessage);
+                            }
+                        }
+                    }                
+                }
+                logger.trace("Leaving selector loop");
+            }  catch (Exception _ex) {
+                logger.error("Thread terminated", _ex);
+            }
+        }
+        
+    }
+
 }
