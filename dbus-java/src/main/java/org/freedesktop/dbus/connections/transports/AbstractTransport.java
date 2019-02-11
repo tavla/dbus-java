@@ -42,8 +42,6 @@ import jnr.enxio.channels.NativeSelectorProvider;
 public abstract class AbstractTransport implements Closeable {
     private final Logger      logger       = LoggerFactory.getLogger(getClass());
 
-    private MessageHandler     msgHandler;
-
     private final BusAddress  address;
     private final int         timeout;
 
@@ -62,7 +60,6 @@ public abstract class AbstractTransport implements Closeable {
         } else {
             mode = SASL.SaslMode.CLIENT;
         }
-        msgHandler = new MessageHandler();
     }
 
     public static String genGUID() {
@@ -74,10 +71,10 @@ public abstract class AbstractTransport implements Closeable {
     }
 
     public void writeMessage(Message message) throws IOException {
-        ByteBuffer buf = ByteBuffer.allocate(1024);
+        ByteBuffer buf = ByteBuffer.allocate(256);
         buf.clear();
         
-        msgHandler.writeMessage(message, buf);
+        MessageHandler.writeMessage(message, buf);
         buf.flip();
         
         while (buf.hasRemaining()) {
@@ -114,32 +111,33 @@ public abstract class AbstractTransport implements Closeable {
                         SelectionKey key = (SelectionKey) it.next();
                         it.remove();
 
-                        if (key.isValid() && key.isAcceptable()) {
+                        if (key.isAcceptable()) {
                             ServerSocketChannel ssc = (ServerSocketChannel) key.channel();
                             SocketChannel socket = (SocketChannel) ssc.accept();
                             socket.configureBlocking(false);
                             logger.debug("New connection from {}", socket.getRemoteAddress());
 
-                            socket.register(sel, SelectionKey.OP_READ | SelectionKey.OP_WRITE);                            
+                            socket.register(sel, SelectionKey.OP_READ);                            
                         }
                         
-                        if (key.isValid() && key.isReadable()) {
+                        if (key.isReadable()) {
                             SocketChannel x = (SocketChannel) key.channel();
-                            MessageHandler mr = new MessageHandler();
                             
-                            ByteBuffer localBuf = ByteBuffer.allocate(2048);
+                            ByteBuffer localBuf = ByteBuffer.allocate(512);
+                            localBuf.clear();
                             int read = x.read(localBuf);
                             
                             if (read == -1) {
                                 logger.error("Unexpected end of file");
                             } else {
                                 localBuf.flip();
-                                Message readMessage = mr.readMessage(localBuf);
+                                Message readMessage = MessageHandler.readMessage(localBuf);
                                 _connection.handleMessage(readMessage);
                             }
                         }
                     }                
                 }
+                logger.trace("Leaving selector loop");
             }  catch (Exception _ex) {
                 getLogger().error("Thread terminated", _ex);
             }
@@ -148,8 +146,6 @@ public abstract class AbstractTransport implements Closeable {
         readerThread.setDaemon(true);
         readerThread.start();
     }
-
-   
     
     protected SelectableChannel getChannel() {
         return channel;

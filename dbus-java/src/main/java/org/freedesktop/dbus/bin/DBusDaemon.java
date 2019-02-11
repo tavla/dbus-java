@@ -69,17 +69,14 @@ public class DBusDaemon extends Thread implements Closeable {
         // CHECKSTYLE:OFF
         public UnixSocketChannel    usock;
         public Socket        tsock;
-        public MessageHandler mhan;
         public String        unique;
         // CHECKSTYLE:ON
 
         Connstruct(UnixSocketChannel sock) {
-            mhan = new MessageHandler();
             this.usock = sock;
         }
 
         Connstruct(Socket sock) throws IOException {
-            mhan = new MessageHandler();
             this.tsock = sock;
         }
 
@@ -579,7 +576,7 @@ public class DBusDaemon extends Thread implements Closeable {
 
                             try {
                                 ByteBuffer buf = ByteBuffer.allocate(1024);
-                                c.mhan.writeMessage(m, buf);
+                                MessageHandler.writeMessage(m, buf);
                                 c.usock.write(buf);
                                 // TODO: write buffer to socket
                             } catch (IOException ioe) {
@@ -628,7 +625,7 @@ public class DBusDaemon extends Thread implements Closeable {
                         throw new IOException("Unexpected end of file");
                     }
                     localBuf.flip();
-                    m = conn.mhan.readMessage(localBuf);
+                    m = MessageHandler.readMessage(localBuf);
                 } catch (IOException ioe) {
                     LOGGER.debug("", ioe);
                     removeConnection(conn);

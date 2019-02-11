@@ -34,6 +34,8 @@ public class UnixSockTransport extends AbstractTransport {
         setSaslAuthMode(SASL.AUTH_EXTERNAL);
     }
 
+    
+    @SuppressWarnings("resource")
     void connect() throws IOException {
         UnixSocketChannel us;
         if (getAddress().isListeningSocket()) {
@@ -43,6 +45,15 @@ public class UnixSockTransport extends AbstractTransport {
             us = unixServerSocket.accept();
         } else {
             us = UnixSocketChannel.open(unixSocketAddress);
+            while (!us.finishConnect()) { // wait until connection established
+                try {
+                    Thread.sleep(100L); 
+                } catch (InterruptedException _ex) {
+                    us.close();
+                    throw new IOException("Interupted while waiting for connection", _ex);
+                } 
+            }
+            getLogger().debug("Client connection to {} established", unixSocketAddress);
         }
         
         us.setOption(UnixSocketOptions.SO_PASSCRED, true);
@@ -56,6 +67,8 @@ public class UnixSockTransport extends AbstractTransport {
         } else {
             us.socket().setSoTimeout(getTimeout());
         }
+        
+        us.socket().setKeepAlive(true);
         
         setChannel(us);
         
