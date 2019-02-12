@@ -8,6 +8,7 @@ import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 
@@ -85,9 +86,12 @@ public class TransportThread extends Thread {
                             logger.error("Unexpected end of file");
                         } else {
                             localBuf.flip();
-                            Message readMessage = MessageHandler.readMessage(localBuf);
-                            connection.handleMessage(readMessage);
-                            logger.trace("Handled incoming message {}", readMessage);
+                            
+                            List<Message> readMessages = MessageHandler.readMessages(localBuf);
+                            for (Message message : readMessages) {
+                                connection.handleMessage(message);
+                                logger.trace("Handled incoming message with serial {}: {}",message.getSerial(), message);
+                            }
                         }
                     }
                     

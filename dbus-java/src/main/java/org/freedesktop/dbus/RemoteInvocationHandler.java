@@ -148,7 +148,7 @@ public class RemoteInvocationHandler implements InvocationHandler {
                 conn.sendMessage(call);
                 return null;
             case CALL_TYPE_SYNC:
-                LOGGER.trace("Retrieving method return synchroniously");
+                LOGGER.info("Retrieving method return synchroniously");
                 conn.sendMessage(call);
                 break;
         }

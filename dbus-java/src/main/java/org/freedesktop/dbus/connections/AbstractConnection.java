@@ -17,10 +17,17 @@ import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Type;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectableChannel;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,13 +37,17 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.regex.Pattern;
 
+import org.freedesktop.Hexdump;
 import org.freedesktop.dbus.DBusAsyncReply;
 import org.freedesktop.dbus.DBusCallInfo;
 import org.freedesktop.dbus.DBusMatchRule;
 import org.freedesktop.dbus.InternalSignal;
 import org.freedesktop.dbus.Marshalling;
+import org.freedesktop.dbus.MessageHandler;
+import org.freedesktop.dbus.MessageReader;
 import org.freedesktop.dbus.MethodTuple;
 import org.freedesktop.dbus.RemoteInvocationHandler;
 import org.freedesktop.dbus.RemoteObject;
@@ -61,10 +72,12 @@ import org.freedesktop.dbus.messages.ObjectTree;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import jnr.enxio.channels.NativeSelectorProvider;
+
 /**
  * Handles a connection to DBus.
  */
-public abstract class AbstractConnection implements Closeable {
+public abstract class AbstractConnection extends Thread implements Closeable {
 
     private static final Map<Thread, DBusCallInfo> INFOMAP     = new ConcurrentHashMap<>();
     /**
@@ -97,18 +110,21 @@ public abstract class AbstractConnection implements Closeable {
     private final Map<SignalTuple, List<DBusSigHandler<? extends DBusSignal>>> handledSignals;
     private final Map<SignalTuple, List<DBusSigHandler<DBusSignal>>>           genericHandledSignals;
     private final Map<Long, MethodCall>                                        pendingCalls;
+    private final LinkedBlockingQueue<Message>                                 outgoingQueue;
 
     private final BusAddress                                                   busAddress;
-
+    
     private boolean                                                            weakreferences   = false;
     private boolean                                                            connected        = false;
 
-    private AbstractTransport                                                  transport;
+    private final AbstractTransport            transport;
+
 
     protected AbstractConnection(String address) throws DBusException {
         exportedObjects = new HashMap<>();
         importedObjects = new ConcurrentHashMap<>();
-
+        outgoingQueue = new LinkedBlockingQueue<>();
+        
         exportedObjects.put(null, new ExportedObject(new GlobalHandler(this), weakreferences));
 
         handledSignals = new ConcurrentHashMap<>();
@@ -121,10 +137,13 @@ public abstract class AbstractConnection implements Closeable {
         objectTree = new ObjectTree();
         fallbackContainer = new FallbackContainer();
 
+        setName("DBus Connection Thread");
+        setDaemon(true);
+        
         try {
             busAddress = new BusAddress(address);
             transport = TransportFactory.createTransport(busAddress, AbstractConnection.TIMEOUT);
-            transport.start(this);
+            start();
            // readerThread = new IncomingMessageThread(this);
             
             connected = true;
@@ -148,13 +167,93 @@ public abstract class AbstractConnection implements Closeable {
 
     public abstract String getMachineId();
 
-    /**
-     * Start reading and sending messages.
-     */
-//    protected void listen() {
-//        readerThread.start();
-//    }
+  
+    @Override
+    public void run() {
+        logger.debug("Transport Thread starting");
+        
+        MessageReader msgHandler = new MessageReader();
+        
+        try (Selector sel = NativeSelectorProvider.getInstance().openSelector();
+                SelectableChannel channel = transport.connect()) {
+            
+            SelectionKey acceptKey;
+            if (channel instanceof ServerSocketChannel) { 
+                acceptKey = channel.register(sel, SelectionKey.OP_ACCEPT);
+            } else {
+                acceptKey = channel.register(sel, SelectionKey.OP_READ | SelectionKey.OP_WRITE);                    
+            }
 
+            while (acceptKey.selector().select() > 0) {
+                Set<SelectionKey> readyKeys = sel.selectedKeys();
+                Iterator<SelectionKey> it = readyKeys.iterator();
+
+                while (it.hasNext()) {
+                    SelectionKey key = it.next();
+                    it.remove();
+
+                    if (key.isAcceptable()) {
+                        logger.trace("Acceptor channel, waiting for client");
+                        ServerSocketChannel ssc = (ServerSocketChannel) key.channel();
+                        SocketChannel socket = (SocketChannel) ssc.accept();
+                        socket.configureBlocking(false);
+                        logger.debug("New connection from {}", socket.getRemoteAddress());
+
+                        socket.register(sel, SelectionKey.OP_READ | SelectionKey.OP_WRITE);                            
+                    } 
+                    
+                    if (key.isReadable()) {
+                        logger.trace("Received readable content on channel");
+                        SocketChannel x = (SocketChannel) key.channel();
+                        
+                        ByteBuffer localBuf = ByteBuffer.allocate(4096);
+                        localBuf.clear();
+                        int read = x.read(localBuf);
+                        
+                        if (read == -1) {
+                            logger.error("Unexpected end of file");
+                        } else {
+                            localBuf.flip();
+                            logger.debug("{}", Hexdump.toAscii(localBuf.array()));
+                            
+                            
+                            List<Message> readMessages = msgHandler.readMessages(localBuf);
+                            for (Message message : readMessages) {
+                                handleMessage(message);
+                                logger.trace("Handled incoming message with serial {}: {}",message.getSerial(), message);
+                            }
+//                            handleMessage(readMessage);
+                            
+                        }
+                    } 
+                    
+                    if (!outgoingQueue.isEmpty() && key.isWritable()) {
+                        long queueSize = outgoingQueue.size();
+                        logger.trace("Writing {} queued messages to channel", queueSize);
+
+                        long cnt = 1;
+                        while (!outgoingQueue.isEmpty()) {
+                            Message msg = outgoingQueue.take();
+                            logger.trace("Sending message {} of {}: {}", cnt++, queueSize, msg);
+                            
+                            ByteBuffer buf = MessageHandler.writeMessage(msg);
+                            
+                            SocketChannel x = (SocketChannel) key.channel();
+                            while (buf.hasRemaining()) {
+                                int writtenBytes = x.write(buf);                                
+                                if (writtenBytes < buf.limit()) {
+                                    logger.warn("Could not write complete message to channel, only {} bytes of {} bytes written", writtenBytes, buf.limit());
+                                }
+                            }
+                        }
+                    }
+                }                
+            }
+            logger.trace("Leaving selector loop");
+        }  catch (Exception _ex) {
+            logger.error("Thread terminated", _ex);        
+        }
+    }
 
     public String getExportedObject(DBusInterface _interface) throws DBusException {
 
@@ -415,14 +514,7 @@ public abstract class AbstractConnection implements Closeable {
         connected = false;
 
         // disconnect from the transport layer
-        try {
-            if (transport != null) {
-                transport.disconnect();
-                transport = null;
-            }
-        } catch (IOException exIo) {
-            logger.debug("Exception while disconnecting transport.", exIo);
-        }
+        interrupt();
 
     }
 
@@ -525,6 +617,14 @@ public abstract class AbstractConnection implements Closeable {
                 .toArray(Class[]::new);
     }
 
+    public synchronized void writeMessage(Message message) throws IOException {
+        try {
+            logger.trace("Adding message to sending queue: {}", message);
+            outgoingQueue.put(message);
+        } catch (InterruptedException _ex) {
+        }
+    }
+    
     protected void handleException(AbstractConnection dbusConnection, Message methodOrSignal,
             DBusExecutionException exception) {
         if (dbusConnection == null) {
@@ -870,7 +970,7 @@ public abstract class AbstractConnection implements Closeable {
                 }
             }
 
-            transport.writeMessage(m);
+            writeMessage(m);
 
         } catch (Exception _ex) {
             logger.debug("Exception while sending message.", _ex);
@@ -895,7 +995,7 @@ public abstract class AbstractConnection implements Closeable {
                 }
             } else if (m instanceof MethodReturn) {
                 try {
-                    transport.writeMessage(new Error(m, _ex));
+                    writeMessage(new Error(m, _ex));
                 } catch (IOException exIo) {
                     logger.debug("", exIo);
                 } catch (DBusException exDe) {

@@ -14,7 +14,9 @@ package org.freedesktop.dbus;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import org.freedesktop.Hexdump;
 import org.freedesktop.dbus.exceptions.DBusException;
@@ -28,24 +30,56 @@ public final class MessageHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MessageHandler.class);
 
-    private MessageHandler() {
+    public MessageHandler() {
         
     }
     
-    public static Message readMessage(ByteBuffer _localBuf) throws IOException, DBusException {
-        byte[]      buf    = null;
+    public static List<Message> readMessages(ByteBuffer _localBuf) throws IOException, DBusException {
+        List<Message> messages = new ArrayList<>();
+        
+        int[]       len    = new int[4];
+        
+        Message readMessage = readMessage(_localBuf, len);
+        if (readMessage != null) {
+            messages.add(readMessage);
+        }
+        
+        int totalLen = Arrays.stream(len).sum();
+        
+        while (totalLen < _localBuf.limit()) {
+            ByteBuffer allocate = ByteBuffer.allocate(_localBuf.remaining());
+            allocate.put(_localBuf.array(), _localBuf.position(), _localBuf.remaining());
+            
+            len[0] = 0;
+            len[1] = 0;
+            len[2] = 0;
+            len[3] = 0;
+            allocate.flip();
+            
+            Message msg = readMessage(allocate, len);
+            if (msg != null) {
+                messages.add(msg);
+            }
+            totalLen+= Arrays.stream(len).sum();
+        }
+        LOGGER.debug("Received {} messages", messages.size());
+        return messages;
+    }
+    
+    static Message readMessage(ByteBuffer _localBuf, int[] len) throws IOException, DBusException {
+        byte[]      fixedHeader    = null;
         byte[]      tbuf   = null;
         byte[]      header = null;
         byte[]      body   = null;
-        int[]       len    = new int[4];
+        
             
             /* Read the 12 byte fixed header, retrying as neccessary */
-            if (null == buf) {
-                buf = new byte[12];
+            if (null == fixedHeader) {
+                fixedHeader = new byte[12];
                 len[0] = 0;
             }
             if (len[0] < 12) {
-                _localBuf.get(buf, len[0], 12 - len[0]);
+                _localBuf.get(fixedHeader, len[0], 12 - len[0]);
                 len[0] += 12 - len[0];
             }
             if (len[0] == 0) {
@@ -57,11 +91,11 @@ public final class MessageHandler {
             }
     
             /* Parse the details from the header */
-            byte endian = buf[0];
-            byte type = buf[1];
-            byte protover = buf[3];
+            byte endian = fixedHeader[0];
+            byte type = fixedHeader[1];
+            byte protover = fixedHeader[3];
             if (protover > Message.PROTOCOL) {
-                buf = null;
+                fixedHeader = null;
                 throw new MessageProtocolVersionException(String.format("Protocol version %s is unsupported", protover));
             }
     
@@ -104,7 +138,7 @@ public final class MessageHandler {
             /* Read the body */
             int bodylen = 0;
             if (null == body) {
-                bodylen = (int) Message.demarshallint(buf, 4, endian, 4);
+                bodylen = (int) Message.demarshallint(fixedHeader, 4, endian, 4);
             }
             if (null == body) {
                 body = new byte[bodylen];
@@ -122,7 +156,7 @@ public final class MessageHandler {
     
             Message m;
             try {
-                m = MessageFactory.createMessage(type, buf, header, body);
+                m = MessageFactory.createMessage(type, fixedHeader, header, body);
             } catch (DBusException | RuntimeException _ex) {
                 LOGGER.debug("", _ex);
                 throw _ex;

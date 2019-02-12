@@ -614,7 +614,7 @@ public class DBusDaemon extends Thread implements Closeable {
 
             while (isRunning() && lrun) {
 
-                Message m = null;
+                List<Message> messages = null;
                 try {
                     ByteBuffer localBuf = ByteBuffer.allocate(2048);
                     int read = conn.usock.read(localBuf);
@@ -622,7 +622,8 @@ public class DBusDaemon extends Thread implements Closeable {
                         throw new IOException("Unexpected end of file");
                     }
                     localBuf.flip();
-                    m = MessageHandler.readMessage(localBuf);
+                    
+                    messages = MessageHandler.readMessages(localBuf);
                 } catch (IOException ioe) {
                     LOGGER.debug("", ioe);
                     removeConnection(conn);
@@ -633,11 +634,14 @@ public class DBusDaemon extends Thread implements Closeable {
                     }
                 }
 
-                if (null != m) {
-                    LOGGER.info("Read {} from {}", m, conn.unique);
+                if (null != messages && !messages.isEmpty()) {
+                    
+                    LOGGER.info("Read {} from {}", messages, conn.unique);
 
                     synchronized (inqueue) {
-                        inqueue.putLast(m, weakconn);
+                        for (Message message : messages) {
+                            inqueue.putLast(message, weakconn);
+                        }
                         inqueue.notifyAll();
                     }
                 }

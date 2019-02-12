@@ -37,7 +37,7 @@ public class UnixSockTransport extends AbstractTransport {
 
     
     @SuppressWarnings("resource")
-    SelectableChannel connect() throws IOException {
+    SelectableChannel connectImpl() throws IOException {
         UnixSocketChannel us;
         if (getAddress().isListeningSocket()) {
             unixServerSocket = UnixServerSocketChannel.open();

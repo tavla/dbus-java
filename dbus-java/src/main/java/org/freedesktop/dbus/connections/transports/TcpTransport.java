@@ -20,7 +20,7 @@ public class TcpTransport extends AbstractTransport {
     }
 
     @Override
-    SelectableChannel connect() throws IOException {
+    SelectableChannel connectImpl() throws IOException {
         SocketChannel socketChannel;
         if (getAddress().isListeningSocket()) {
             ServerSocketChannel ss = ServerSocketChannel.open();

@@ -30,6 +30,7 @@ public class TestCross {
     @BeforeEach
     public void before() {
         serverThread = new ServerThread();
+        serverThread.setName("UnitTest ServerThread");
         serverThread.start();
     }
 

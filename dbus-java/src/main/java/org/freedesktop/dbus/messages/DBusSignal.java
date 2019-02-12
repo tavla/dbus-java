@@ -341,9 +341,5 @@ public class DBusSignal extends Message {
         bodydone = true;
     }
 
-    @Override
-    public String toString() {
-        return "DBusSignal [clazz=" + clazz + "]";
-    }
 
 }

@@ -97,7 +97,7 @@ public final class DBusConnection extends AbstractConnection {
      * @return {@link DBusConnection}
      */
     public static DBusConnection getConnection(String _address) throws DBusException {
-        return getConnection(_address, true, true);
+        return getConnection(_address, true);
     }
 
     /**
@@ -107,31 +107,14 @@ public final class DBusConnection extends AbstractConnection {
      * 
      * @param _address The address of the bus to connect to
      * @param _registerSelf register own session in dbus
-     * @param _shared use a shared connections
      * @throws DBusException If there is a problem connecting to the Bus.
      * @return {@link DBusConnection}
      */
-    public static DBusConnection getConnection(String _address, boolean _registerSelf, boolean _shared)
+    public static DBusConnection getConnection(String _address, boolean _registerSelf)
             throws DBusException {
 
         // CONNECTIONS.getOrDefault(address, defaultValue)
-        if (_shared) {
-            synchronized (CONNECTIONS) {
-                DBusConnection c = CONNECTIONS.get(_address);
-                if (c != null) {
-                    c.concurrentConnections.incrementAndGet();
-                    return c;
-                } else {
-                    c = new DBusConnection(_address, _shared, _registerSelf, getDbusMachineId());
-                    // do not increment connection counter here, it always starts at 1 on new objects!
-                    // c.getConcurrentConnections().incrementAndGet();
-                    CONNECTIONS.put(_address, c);
-                    return c;
-                }
-            }
-        } else {
-            return new DBusConnection(_address, _shared, _registerSelf, getDbusMachineId());
-        }
+        return new DBusConnection(_address, false, _registerSelf, getDbusMachineId());
     }
 
     private static DBusConnection getConnection(Supplier<String> _addressGenerator, boolean _registerSelf, boolean _shared) throws DBusException {
@@ -142,7 +125,7 @@ public final class DBusConnection extends AbstractConnection {
         if (address == null) {
             throw new DBusException("null is not a valid DBUS address");
         }
-        return getConnection(address, _registerSelf, _shared);
+        return getConnection(address, _registerSelf);
     }
 
     /**

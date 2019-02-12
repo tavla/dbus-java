@@ -10,13 +10,17 @@
 
     <logger name="com" level="INFO" />
     <logger name="org" level="INFO" />
-    <logger name="cx.ath.matthew" level="INFO" />
     <logger name="org.freedesktop.DBus" level="TRACE" />
     <logger name="org.freedesktop.dbus.connections" level="TRACE" />    
     <logger name="org.freedesktop.dbus.errors" level="INFO" />
     <logger name="org.freedesktop.dbus.messages" level="INFO" />
     <logger name="org.freedesktop.dbus.connections.transports" level="TRACE" />
     <logger name="org.freedesktop.dbus.bin" level="INFO" />
+    <logger name="org.freedesktop.DBus$NameAcquired" level="INFO" />
+    <logger name="org.freedesktop.dbus.connections.SASL" level="INFO" />
+    <logger name="org.freedesktop.dbus.MessageHandler" level="DEBUG" />
+    
+    
 
     <root level="TRACE">
         <appender-ref ref="STDOUT" />

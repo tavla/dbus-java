@@ -9,11 +9,9 @@ import java.nio.channels.SelectableChannel;
 import java.util.Random;
 
 import org.freedesktop.Hexdump;
-import org.freedesktop.dbus.connections.AbstractConnection;
 import org.freedesktop.dbus.connections.BusAddress;
 import org.freedesktop.dbus.connections.SASL;
 import org.freedesktop.dbus.connections.SASL.SaslMode;
-import org.freedesktop.dbus.messages.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,7 +24,7 @@ public abstract class AbstractTransport implements Closeable {
     private SaslMode          mode         = SaslMode.CLIENT;
     private int               saslAuthMode = SASL.AUTH_NONE;
 
-    private TransportThread   transportThread;
+    private SelectableChannel channel;
     
     AbstractTransport(BusAddress _address, int _timeout) {
         address = _address;
@@ -47,9 +45,12 @@ public abstract class AbstractTransport implements Closeable {
         return guid.replaceAll(" ", "");
     }
 
-   
-
-    abstract SelectableChannel connect() throws IOException;
+    abstract SelectableChannel connectImpl() throws IOException;
+    
+    public SelectableChannel connect() throws IOException {
+        channel = connectImpl();
+        return channel;
+    }
     
     protected void authenticate(OutputStream _out, InputStream _in, Socket _sock) throws IOException {
         if (!(new SASL()).auth(mode, saslAuthMode, address.getGuid(), _out, _in, _sock)) {
@@ -58,13 +59,6 @@ public abstract class AbstractTransport implements Closeable {
         }
     }
 
-    public void start(AbstractConnection _connection) throws IOException {
-        SelectableChannel channel = connect();
-        transportThread = new TransportThread(channel, _connection);
-        
-        transportThread.start();
-    }
-    
     protected int getSaslAuthMode() {
         return saslAuthMode;
     }
@@ -92,16 +86,15 @@ public abstract class AbstractTransport implements Closeable {
     protected Logger getLogger() {
         return logger;
     }
-
-    public void writeMessage(Message _m) throws IOException {
-        transportThread.writeMessage(_m);
+    
+    public SelectableChannel getChannel() {
+        return channel;
     }
 
-    
     @Override
     public void close() throws IOException {
-        if (transportThread != null) {
-            transportThread.interrupt();
+        if (channel != null) {
+            channel.close();
         }
     }
     
