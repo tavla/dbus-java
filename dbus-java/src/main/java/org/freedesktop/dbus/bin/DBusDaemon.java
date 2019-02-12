@@ -575,10 +575,7 @@ public class DBusDaemon extends Thread implements Closeable {
                             logger.info("Sending message {} to {}", m, c.unique);
 
                             try {
-                                ByteBuffer buf = ByteBuffer.allocate(1024);
-                                MessageHandler.writeMessage(m, buf);
-                                c.usock.write(buf);
-                                // TODO: write buffer to socket
+                                c.usock.write(MessageHandler.writeMessage(m));
                             } catch (IOException ioe) {
                                 logger.debug("", ioe);
                                 removeConnection(c);

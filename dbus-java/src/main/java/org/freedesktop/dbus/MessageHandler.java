@@ -12,10 +12,9 @@
 
 package org.freedesktop.dbus;
 
-import java.io.EOFException;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 import org.freedesktop.Hexdump;
 import org.freedesktop.dbus.exceptions.DBusException;
@@ -39,21 +38,15 @@ public final class MessageHandler {
         byte[]      header = null;
         byte[]      body   = null;
         int[]       len    = new int[4];
-
-        try (ByteBufferInputStream inputStream = new ByteBufferInputStream(_localBuf)) {
             
-            int rv;
             /* Read the 12 byte fixed header, retrying as neccessary */
             if (null == buf) {
                 buf = new byte[12];
                 len[0] = 0;
             }
             if (len[0] < 12) {
-                rv = inputStream.read(buf, len[0], 12 - len[0]);
-                if (-1 == rv) {
-                    throw new EOFException("Underlying transport returned EOF (1)");
-                }
-                len[0] += rv;
+                _localBuf.get(buf, len[0], 12 - len[0]);
+                len[0] += 12 - len[0];
             }
             if (len[0] == 0) {
                 return null;
@@ -78,11 +71,8 @@ public final class MessageHandler {
                 len[1] = 0;
             }
             if (len[1] < 4) {
-                rv = inputStream.read(tbuf, len[1], 4 - len[1]);
-                if (-1 == rv) {
-                    throw new EOFException("Underlying transport returned EOF (2)");
-                }
-                len[1] += rv;
+                _localBuf.get(tbuf, len[1], 4 - len[1]);
+                len[1] += 4 - len[1];
             }
             if (len[1] < 4) {
                 LOGGER.debug("Only got {} of 4 bytes of header", len[1]);
@@ -103,11 +93,8 @@ public final class MessageHandler {
                 len[2] = 0;
             }
             if (len[2] < headerlen) {
-                rv = inputStream.read(header, 8 + len[2], headerlen - len[2]);
-                if (-1 == rv) {
-                    throw new EOFException("Underlying transport returned EOF (3)");
-                }
-                len[2] += rv;
+                _localBuf.get(header, 8 + len[2], headerlen - len[2]);
+                len[2] += headerlen - len[2];
             }
             if (len[2] < headerlen) {
                 LOGGER.debug("Only got {} of {} bytes of header", len[2], headerlen);
@@ -124,12 +111,9 @@ public final class MessageHandler {
                 len[3] = 0;
             }
             if (len[3] < body.length) {
-                rv = inputStream.read(body, len[3], body.length - len[3]);
+                _localBuf.get(body, len[3], body.length - len[3]);
     
-                if (-1 == rv) {
-                    throw new EOFException("Underlying transport returned EOF (4)");
-                }
-                len[3] += rv;
+                len[3] += body.length - len[3];
             }
             if (len[3] < body.length) {
                 LOGGER.debug("Only got {} of {} bytes of body", len[3], body.length);
@@ -145,17 +129,17 @@ public final class MessageHandler {
             }
             LOGGER.debug("=> {}", m);
             return m;
-        }
+        
     }
     
-    public static void writeMessage(Message _msg, ByteBuffer _buffer) throws IOException {
+    public static ByteBuffer writeMessage(Message _msg) throws IOException {
         LOGGER.debug("<= {}", _msg);
         if (null == _msg) {
-            return;
+            return null;
         }
         if (null == _msg.getWireData()) {
             LOGGER.warn("Message {} wire-data was null!", _msg);
-            return;
+            return null;
         }
         if (LOGGER.isTraceEnabled()) {
             LOGGER.debug("Writing all {} buffers simultaneously to Unix Socket", _msg.getWireData().length );
@@ -163,35 +147,24 @@ public final class MessageHandler {
                 LOGGER.trace("({}):{}", buf, (null == buf ? "" : Hexdump.format(buf)));
             }
         }
+        
+        int bufferSize = Arrays.stream(_msg.getWireData())
+                .filter(w -> w != null)
+                .mapToInt(w -> w.length)
+                .sum();
+        ByteBuffer buffer = ByteBuffer.allocate(bufferSize);
+        buffer.clear();
+        
         for (byte[] buf : _msg.getWireData()) {
             LOGGER.trace("({}):{}", buf, (null == buf ? "" : Hexdump.format(buf)));
             if (null == buf) {
                 break;
             }
-            _buffer.put(buf);
+            buffer.put(buf);
         }
+        
+        buffer.flip();
+        return buffer;
    }
-   
     
-    static class ByteBufferInputStream extends InputStream {
-
-        private ByteBuffer buf;
-
-        ByteBufferInputStream(ByteBuffer buf) {
-            this.buf = buf;
-        }
-
-        public synchronized int read() throws IOException {
-            if (!buf.hasRemaining()) {
-                return -1;
-            }
-            return buf.get();
-        }
-
-        public synchronized int read(byte[] bytes, int off, int len) throws IOException {
-            len = Math.min(len, buf.remaining());
-            buf.get(bytes, off, len);
-            return len;
-        }
-    }
 }
