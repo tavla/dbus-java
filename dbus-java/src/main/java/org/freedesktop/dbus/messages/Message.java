@@ -1313,6 +1313,14 @@ public class Message {
         }
     }
 
+    /**
+     * Type of this message.
+     * @return byte
+     */
+    public byte getType() {
+        return type;
+    }
+    
     /** Defines constants representing the flags which can be set on a message. */
     public interface Flags {
         byte NO_REPLY_EXPECTED = 0x01;

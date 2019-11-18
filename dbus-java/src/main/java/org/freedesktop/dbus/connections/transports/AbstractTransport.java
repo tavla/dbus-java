@@ -31,6 +31,8 @@ public abstract class AbstractTransport implements Closeable {
     private int              saslAuthMode;
     private MessageReader    inputReader;
     private MessageWriter    outputWriter;
+    
+    private boolean fileDescriptorSupported;
 
     AbstractTransport(BusAddress _address) {
         address = _address;
@@ -52,6 +54,9 @@ public abstract class AbstractTransport implements Closeable {
      * @throws IOException on write error or if output was already closed or null
      */
     public void writeMessage(Message _msg) throws IOException {
+        if (!fileDescriptorSupported && Message.ArgumentType.FILEDESCRIPTOR == _msg.getType()) {
+            throw new IllegalArgumentException("File descriptors are not supported by the remote end!");
+        }
         if (outputWriter != null && !outputWriter.isClosed()) {
             outputWriter.writeMessage(_msg);
         } else {
@@ -89,10 +94,12 @@ public abstract class AbstractTransport implements Closeable {
      * @throws IOException on any error
      */
     protected void authenticate(OutputStream _out, InputStream _in, Socket _sock) throws IOException {
-        if (!(new SASL()).auth(saslMode, saslAuthMode, address.getGuid(), _out, _in, _sock)) {
+        SASL sasl = new SASL();
+        if (!sasl.auth(saslMode, saslAuthMode, address.getGuid(), _out, _in, _sock)) {
             _out.close();
             throw new IOException("Failed to auth");
         }
+        fileDescriptorSupported = sasl.isFileDescriptorSupported();
     }
 
 
@@ -120,6 +127,8 @@ public abstract class AbstractTransport implements Closeable {
         saslMode = _saslMode;
     }
 
+    
+    
     protected BusAddress getAddress() {
         return address;
     }

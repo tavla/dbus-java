@@ -1,11 +1,6 @@
 package org.freedesktop.dbus.connections;
 
-import static org.freedesktop.dbus.connections.SASL.SaslCommand.AUTH;
-import static org.freedesktop.dbus.connections.SASL.SaslCommand.BEGIN;
-import static org.freedesktop.dbus.connections.SASL.SaslCommand.CANCEL;
-import static org.freedesktop.dbus.connections.SASL.SaslCommand.DATA;
-import static org.freedesktop.dbus.connections.SASL.SaslCommand.ERROR;
-import static org.freedesktop.dbus.connections.SASL.SaslCommand.REJECTED;
+import static org.freedesktop.dbus.connections.SASL.SaslCommand.*;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -55,6 +50,7 @@ public class SASL {
 
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
+    private boolean fileDescriptorSupported;
     
 
     private String findCookie(String context, String ID) throws IOException {
@@ -399,7 +395,8 @@ public class SASL {
         int failed = 0;
         int current = 0;
         SaslAuthState state = SaslAuthState.INITIAL_STATE;
-
+        boolean askForFd = false;
+        
         while (state != SaslAuthState.AUTHENTICATED && state != SaslAuthState.FAILED) {
 
             logger.trace("AUTH state: {}", state);
@@ -449,13 +446,29 @@ public class SASL {
                             }
                             break;
                         case ERROR:
-                            send(out, CANCEL);
-                            state = SaslAuthState.WAIT_REJECT;
+                            // when asking for file descriptor support, ERROR means FD support is not supported
+                            if (askForFd) { 
+                                logger.trace("File descriptors NOT supported by server");
+                                fileDescriptorSupported = false;
+                                send(out, BEGIN);                            
+                            } else {
+                                send(out, CANCEL);
+                                state = SaslAuthState.WAIT_REJECT;
+                            }
                             break;
                         case OK:
                             logger.trace("Authenticated");
-                            send(out, BEGIN);                            
                             state = SaslAuthState.AUTHENTICATED;
+
+                            logger.trace("Asking for file descriptor support");
+                            // if authentication was successful, ask remote end for file descriptor support
+                            send(out, SaslCommand.NEGOTIATE_UNIX_FD);
+                            askForFd = true;
+                            break;
+                        case AGREE_UNIX_FD:
+                            logger.trace("File descriptors supported by server");
+                            fileDescriptorSupported = true;
+                            send(out, BEGIN);                            
                             break;
                         default:
                             send(out, ERROR, "Got invalid command");
@@ -624,6 +637,10 @@ public class SASL {
                             case BEGIN:
                                     state = SaslAuthState.AUTHENTICATED;
                             break;
+                            case NEGOTIATE_UNIX_FD:
+                                logger.debug("File descriptor negotiation requested");
+                                send(out, AGREE_UNIX_FD);
+                            break;
                             default:
                                 send(out, ERROR, "Got invalid command");
                             break;
@@ -652,7 +669,9 @@ public class SASL {
         OK,       
         BEGIN,    
         CANCEL,   
-        ERROR;  
+        ERROR,
+        NEGOTIATE_UNIX_FD,
+        AGREE_UNIX_FD;  
     }
 
     static enum SaslAuthState {
@@ -724,6 +743,10 @@ public class SASL {
             } else if (0 == col.compare(ss[0], "ERROR")) {
                 command = ERROR;
                 data = ss[1];
+            } else if (0 == col.compare(ss[0], "NEGOTIATE_UNIX_FD")) {
+                command = NEGOTIATE_UNIX_FD;
+            } else if (0 == col.compare(ss[0], "AGREE_UNIX_FD")) {
+                command = AGREE_UNIX_FD;                
             } else {
                 throw new IOException("Invalid Command " + ss[0]);
             }
@@ -754,6 +777,10 @@ public class SASL {
         public String toString() {
             return "Command(" + command + ", " + mechs + ", " + data + ")";
         }
+    }
+
+    public boolean isFileDescriptorSupported() {
+        return fileDescriptorSupported;
     }
     
 }
