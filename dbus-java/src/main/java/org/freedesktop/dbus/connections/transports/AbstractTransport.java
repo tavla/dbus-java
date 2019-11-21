@@ -84,7 +84,14 @@ public abstract class AbstractTransport implements Closeable {
      * @throws IOException when connection fails
      */
     abstract void connect() throws IOException;
-     
+    
+    /**
+     * Method to indicate if passing of file descriptors is allowed.
+     *  
+     * @return true to allow FD passing, false otherwise
+     */
+    abstract boolean hasFileDescriptorSupport();
+    
     /**
      * Helper method to authenticate to DBus using SASL.
      * 
@@ -94,7 +101,7 @@ public abstract class AbstractTransport implements Closeable {
      * @throws IOException on any error
      */
     protected void authenticate(OutputStream _out, InputStream _in, Socket _sock) throws IOException {
-        SASL sasl = new SASL();
+        SASL sasl = new SASL(hasFileDescriptorSupport());
         if (!sasl.auth(saslMode, saslAuthMode, address.getGuid(), _out, _in, _sock)) {
             _out.close();
             throw new IOException("Failed to auth");

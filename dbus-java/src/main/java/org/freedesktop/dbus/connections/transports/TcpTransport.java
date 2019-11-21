@@ -26,6 +26,11 @@ public class TcpTransport extends AbstractTransport {
         setSaslAuthMode(SASL.AUTH_SHA);
     }
 
+    @Override
+    boolean hasFileDescriptorSupport() {
+        return false; // file descriptor passing not possible on TCP connections
+    }
+
     /**
      * Connect to DBus using TCP.
      * @throws IOException on error

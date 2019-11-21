@@ -35,6 +35,11 @@ public class UnixSocketTransport extends AbstractTransport {
         setSaslAuthMode(SASL.AUTH_EXTERNAL);
     }
 
+    @Override
+    boolean hasFileDescriptorSupport() {
+        return true; // file descriptor passing allowed when using UNIX_SOCK
+    }
+
     /**
      * Establish a connection to DBus using unix sockets.
      * @throws IOException on error

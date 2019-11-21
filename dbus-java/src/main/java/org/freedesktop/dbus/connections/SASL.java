@@ -51,7 +51,26 @@ public class SASL {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private boolean fileDescriptorSupported;
+    /** whether file descriptor passing is supported on the current connection. */
+    private boolean hasFileDescriptorSupport;
     
+    /**
+     * Create a new SASL auth handler.
+     * Defaults to disable file descriptor passing.
+     */
+    public SASL() {
+        this(false);
+    }
+    
+    /**
+     * Create a new SASL auth handler.
+     * 
+     * @param _hasFileDescriptorSupport true to support file descriptor passing (usually only works with UNIX_SOCKET).
+     */
+    public SASL(boolean _hasFileDescriptorSupport) {
+        hasFileDescriptorSupport = _hasFileDescriptorSupport;
+
+    }
 
     private String findCookie(String context, String ID) throws IOException {
         String homedir = System.getProperty("user.home");
@@ -460,15 +479,19 @@ public class SASL {
                             logger.trace("Authenticated");
                             state = SaslAuthState.AUTHENTICATED;
 
-                            logger.trace("Asking for file descriptor support");
-                            // if authentication was successful, ask remote end for file descriptor support
-                            send(out, SaslCommand.NEGOTIATE_UNIX_FD);
-                            askForFd = true;
+                            if (hasFileDescriptorSupport) {
+                                logger.trace("Asking for file descriptor support");
+                                // if authentication was successful, ask remote end for file descriptor support
+                                send(out, SaslCommand.NEGOTIATE_UNIX_FD);
+                                askForFd = true;
+                            }
                             break;
                         case AGREE_UNIX_FD:
-                            logger.trace("File descriptors supported by server");
-                            fileDescriptorSupported = true;
-                            send(out, BEGIN);                            
+                            if (hasFileDescriptorSupport) {
+                                logger.trace("File descriptors supported by server");
+                                fileDescriptorSupported = true;
+                                send(out, BEGIN);
+                            }
                             break;
                         default:
                             send(out, ERROR, "Got invalid command");
@@ -639,7 +662,12 @@ public class SASL {
                             break;
                             case NEGOTIATE_UNIX_FD:
                                 logger.debug("File descriptor negotiation requested");
-                                send(out, AGREE_UNIX_FD);
+                                if (!hasFileDescriptorSupport) {
+                                    send(out, ERROR);
+                                } else {
+                                    send(out, AGREE_UNIX_FD);
+                                }
+                                
                             break;
                             default:
                                 send(out, ERROR, "Got invalid command");
