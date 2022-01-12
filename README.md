@@ -10,6 +10,10 @@ Using this version as replacement for 2.7.x however, will not work without chang
 
 #### Changes
 
+##### Changes in 3.32 (not yet released):
+   - Fixed regression not allowing to use classes directly implementing `DBusInterface` to be exported on the bus ([#157](https://github.com/hypfvieh/dbus-java/issues/157))
+
+
 ##### Changes in 3.3.1 (Released: 2021-10-23):
    - Fixed some issues in InterfaceCodeGenerator related to signal constructors, thanks to [poeschel](https://github.com/poeschel) ([PR#146](https://github.com/hypfvieh/dbus-java/pull/146))
    - Fixed some issues in InterfaceCodeGenerator related to usage of Tuples, thanks to [poeschel](https://github.com/poeschel) ([PR#147](https://github.com/hypfvieh/dbus-java/pull/147))
